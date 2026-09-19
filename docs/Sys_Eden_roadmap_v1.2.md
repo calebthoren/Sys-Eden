@@ -17,7 +17,12 @@ configuration and independent storage budgets, structured logging, SQLite/WAL an
 transactional sessions, packaged Alembic baseline, in-process async events,
 fake-provider health, and CLI bootstrap. Validation: 15 tests, Ruff, Pyright,
 `uv sync`, CLI help/health, package build, and isolated packaged bootstrap.
-The next implementation milestone is Milestone 2, read-only Windows inspection.
+The current implementation milestone is Milestone 2, read-only Windows inspection.
+Its first slice adds OS/build/boot timestamps, CPU, and RAM collectors, a
+parameterized CIM reader for those provider classes, and the `eden inspect` CLI.
+Remaining work includes explicit uptime, GPU, storage, networking, processes,
+services, startup, drivers, software, event logs, crashes, and broader generic
+read interfaces. Milestone 2 acceptance has not yet been reached.
 The repository retains the initial `src/sys_eden/` package spelling.
 
 
