@@ -7,8 +7,11 @@ from uuid import uuid4
 from pydantic import BaseModel, Field, JsonValue
 
 from sys_eden.inspection_models import (
+    BootInspection,
     CpuInspection,
+    CrashesInspection,
     DriversInspection,
+    EventsInspection,
     GpuInspection,
     InspectionData,
     MemoryInspection,
@@ -75,6 +78,34 @@ class SoftwareInventoryReader(Protocol):
     async def installed_software(self) -> list[dict[str, JsonValue]]: ...
 
 
+EventProviderName = Literal[
+    "EventLog",
+    "Microsoft-Windows-Diagnostics-Performance",
+    "Microsoft-Windows-Kernel-General",
+    "Microsoft-Windows-Kernel-Power",
+]
+
+
+class EventQuery(BaseModel):
+    log_names: list[
+        Literal[
+            "Application",
+            "System",
+            "Microsoft-Windows-Diagnostics-Performance/Operational",
+        ]
+    ] = Field(min_length=1, max_length=3)
+    provider_names: list[EventProviderName] = Field(default_factory=list, max_length=4)
+    event_ids: list[int] = Field(default_factory=list, max_length=64)
+    levels: list[int] = Field(default_factory=list, max_length=5)
+    since_hours: float = Field(gt=0, le=24 * 90)
+    limit: int = Field(gt=0, le=500)
+    include_event_data: bool = False
+
+
+class EventLogReader(Protocol):
+    async def query_events(self, request: EventQuery) -> list[dict[str, JsonValue]]: ...
+
+
 class InspectionProvider(Protocol):
     async def system(self, *, details: bool) -> SystemInspection: ...
 
@@ -97,6 +128,12 @@ class InspectionProvider(Protocol):
     async def drivers(self, *, details: bool) -> DriversInspection: ...
 
     async def software(self, *, details: bool) -> SoftwareInspection: ...
+
+    async def events(self, *, details: bool) -> EventsInspection: ...
+
+    async def crashes(self, *, details: bool) -> CrashesInspection: ...
+
+    async def boot(self, *, details: bool) -> BootInspection: ...
 
 
 class InspectionResult(BaseModel):
@@ -134,6 +171,12 @@ async def collect(name: str, provider: InspectionProvider, *, details: bool) -> 
             data = await provider.drivers(details=details)
         elif name == "software":
             data = await provider.software(details=details)
+        elif name == "events":
+            data = await provider.events(details=details)
+        elif name == "crashes":
+            data = await provider.crashes(details=details)
+        elif name == "boot":
+            data = await provider.boot(details=details)
         else:
             raise InspectionError("CapabilityUnavailable")
     except InspectionError as error:

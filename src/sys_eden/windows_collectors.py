@@ -7,13 +7,26 @@ from typing import Literal
 
 from pydantic import JsonValue
 
-from sys_eden.inspection import CimQuery, CimReader, InspectionError, SoftwareInventoryReader
+from sys_eden.inspection import (
+    CimQuery,
+    CimReader,
+    EventLogReader,
+    EventProviderName,
+    EventQuery,
+    InspectionError,
+    SoftwareInventoryReader,
+)
 from sys_eden.inspection_models import (
+    BootEvidence,
+    BootInspection,
     CpuConfiguration,
     CpuDetails,
     CpuIdentity,
     CpuInspection,
     CpuState,
+    CrashDetails,
+    CrashesInspection,
+    CrashRecord,
     DiskConfiguration,
     DiskDetails,
     DiskIdentity,
@@ -22,6 +35,9 @@ from sys_eden.inspection_models import (
     DriverEntry,
     DriverIdentity,
     DriversInspection,
+    EventDetails,
+    EventRecord,
+    EventsInspection,
     GpuAdapter,
     GpuConfiguration,
     GpuDetails,
@@ -148,6 +164,35 @@ _OPERATIONAL_STATUSES = {
     19: "Relocating",
 }
 _PARTITION_STYLES = {0: "RAW", 1: "MBR", 2: "GPT"}
+_EVENT_LEVELS = {1: "Critical", 2: "Error", 3: "Warning", 4: "Information", 5: "Verbose"}
+_WER_CRASH_MARKERS = (
+    "appcrash",
+    "apphang",
+    "bex",
+    "bluescreen",
+    "clr20",
+    "crash",
+    "hang",
+    "livekernel",
+    "radar",
+    "stoppedworking",
+)
+_CRASH_METADATA_FIELDS = (
+    "EventName",
+    "HashedBucket",
+    "Bucket",
+    "BucketType",
+    "ReportStatus",
+    "Response",
+    "PackageFullName",
+    "PackageRelativeAppId",
+    "HangType",
+    "ProcessId",
+    "FaultingProcessId",
+    "ExeFileName",
+    "AppPath",
+    "IntegratorReportId",
+)
 
 
 def _clean(value: JsonValue | None) -> str | None:
@@ -216,9 +261,11 @@ class WindowsInspectionProvider:
         self,
         reader: CimReader,
         software_reader: SoftwareInventoryReader | None = None,
+        event_reader: EventLogReader | None = None,
     ):
         self._reader = reader
         self._software_reader = software_reader
+        self._event_reader = event_reader
 
     async def _query(
         self,
@@ -1196,6 +1243,247 @@ class WindowsInspectionProvider:
         applications.sort(key=lambda item: item.identity.name.casefold())
         return SoftwareInspection(applications=applications)
 
+    async def events(self, *, details: bool) -> EventsInspection:
+        if self._event_reader is None:
+            raise InspectionError("CapabilityUnavailable")
+        request = EventQuery(
+            log_names=["System", "Application"],
+            levels=[1, 2, 3],
+            since_hours=24,
+            limit=100 if details else 50,
+            include_event_data=details,
+        )
+        rows = await self._event_reader.query_events(request)
+        observations = []
+        if len(rows) == request.limit:
+            observations.append(
+                Observation(
+                    code="event_query_limit_reached",
+                    message=(
+                        f"The event query reached its {request.limit}-record limit; "
+                        "additional matching events may exist."
+                    ),
+                    severity="information",
+                )
+            )
+        return EventsInspection(
+            filter_description=(
+                "Critical, error, and warning events from System and Application "
+                "during the last 24 hours"
+            ),
+            events=[self._event_record(row, details) for row in rows],
+            observations=observations,
+        )
+
+    async def crashes(self, *, details: bool) -> CrashesInspection:
+        if self._event_reader is None:
+            raise InspectionError("CapabilityUnavailable")
+        rows = await self._event_reader.query_events(
+            EventQuery(
+                log_names=["Application"],
+                event_ids=[1000, 1001, 1002],
+                since_hours=24 * 30,
+                limit=200,
+                include_event_data=True,
+            )
+        )
+        grouped: dict[tuple[str | None, str, str | None, str | None], CrashRecord] = {}
+        for row in rows:
+            data = self._event_data(row)
+            event_id = _integer(row.get("EventId"))
+            if not self._is_crash_event(event_id, data):
+                continue
+            crash_type = self._crash_type(event_id, data)
+            application = self._crash_application(event_id, data)
+            module = self._crash_module(event_id, data)
+            exception_code = self._crash_exception_code(event_id, data)
+            key = (application, crash_type, module, exception_code)
+            existing = grouped.get(key)
+            if existing is not None:
+                existing.recurrence_count += 1
+                continue
+            grouped[key] = CrashRecord(
+                timestamp=_datetime(row.get("Timestamp")),
+                affected_application=application,
+                crash_type=crash_type,
+                faulting_module=module,
+                exception_code=exception_code,
+                details=(
+                    CrashDetails(
+                        faulting_module_version=self._crash_module_version(event_id, data),
+                        faulting_module_path=self._event_value(
+                            data, "ModulePath", "FaultingModulePath"
+                        ),
+                        exception_offset=self._crash_exception_offset(event_id, data),
+                        report_id=self._event_value(data, "ReportId", "ReportIdentifier"),
+                        bucket_id=self._event_value(
+                            data, "BucketId", "FaultBucket", "HashedBucket", "Bucket"
+                        ),
+                        event_id=event_id,
+                        record_id=_integer(row.get("RecordId")),
+                        application_version=self._crash_application_version(event_id, data),
+                        event_data=self._crash_metadata(data),
+                    )
+                    if details
+                    else None
+                ),
+            )
+        crashes = list(grouped.values())
+        crashes.sort(key=lambda item: item.timestamp or datetime.min.replace(tzinfo=UTC), reverse=True)
+        observations = []
+        if len(rows) == 200:
+            observations.append(
+                Observation(
+                    code="crash_query_limit_reached",
+                    message=(
+                        "The crash query reached its 200-record limit; recurrence counts "
+                        "may be lower bounds."
+                    ),
+                    severity="information",
+                )
+            )
+        return CrashesInspection(crashes=crashes, observations=observations)
+
+    async def boot(self, *, details: bool) -> BootInspection:
+        if self._event_reader is None:
+            raise InspectionError("CapabilityUnavailable")
+        warnings: list[SourceWarning] = []
+        operating_systems, _ = await self._query(
+            "Win32_OperatingSystem", ["LastBootUpTime"], warnings, limit=1
+        )
+        last_boot = _datetime(_first(operating_systems).get("LastBootUpTime"))
+        uptime = (
+            max(0.0, (datetime.now(UTC) - last_boot).total_seconds())
+            if last_boot is not None
+            else None
+        )
+        system_rows: list[dict[str, JsonValue]] = []
+        boot_sources: tuple[tuple[EventProviderName, list[int]], ...] = (
+            ("Microsoft-Windows-Kernel-General", [12, 13]),
+            ("Microsoft-Windows-Kernel-Power", [41]),
+            ("EventLog", [6005, 6006, 6008]),
+        )
+        for provider_name, event_ids in boot_sources:
+            system_rows.extend(
+                await self._safe_events(
+                    EventQuery(
+                        log_names=["System"],
+                        provider_names=[provider_name],
+                        event_ids=event_ids,
+                        since_hours=24 * 30,
+                        limit=100,
+                        include_event_data=details,
+                    ),
+                    warnings,
+                    f"{provider_name} boot events",
+                )
+            )
+        system_rows.sort(
+            key=lambda row: _datetime(row.get("Timestamp"))
+            or datetime.min.replace(tzinfo=UTC),
+            reverse=True,
+        )
+        performance_rows = await self._safe_events(
+            EventQuery(
+                log_names=["Microsoft-Windows-Diagnostics-Performance/Operational"],
+                provider_names=["Microsoft-Windows-Diagnostics-Performance"],
+                event_ids=list(range(100, 111)),
+                since_hours=24 * 30,
+                limit=100,
+                include_event_data=True,
+            ),
+            warnings,
+            "Boot performance events",
+        )
+        recent_boot_times = self._boot_times(system_rows, last_boot)
+        previous_shutdown = self._previous_shutdown(system_rows, recent_boot_times)
+        boot_record = next(
+            (row for row in performance_rows if _integer(row.get("EventId")) == 100),
+            None,
+        )
+        boot_duration = (
+            _integer(self._event_data(boot_record).get("BootTime"))
+            if boot_record is not None
+            else None
+        )
+        startup_warnings = [
+            self._event_record(row, details)
+            for row in performance_rows
+            if (_integer(row.get("EventId")) or 0) in range(101, 111)
+        ]
+        observations: list[Observation] = []
+        if previous_shutdown == "unexpected":
+            observations.append(
+                Observation(
+                    code="unexpected_previous_shutdown",
+                    message="Windows recorded the previous shutdown as unexpected.",
+                    severity="warning",
+                )
+            )
+        evidence = None
+        if details:
+            evidence = [
+                BootEvidence(
+                    timestamp=_datetime(row.get("Timestamp")),
+                    event_id=_integer(row.get("EventId")),
+                    channel=_clean(row.get("Channel")),
+                    record_id=_integer(row.get("RecordId")),
+                    summary=self._summary(_clean(row.get("Message"))),
+                )
+                for row in [*system_rows, *performance_rows][:50]
+            ]
+        return BootInspection(
+            recent_boot_times=recent_boot_times,
+            current_uptime_seconds=uptime,
+            previous_shutdown=previous_shutdown,
+            latest_boot_duration_ms=boot_duration,
+            startup_warnings=startup_warnings,
+            evidence=evidence,
+            observations=observations,
+            warnings=warnings,
+        )
+
+    async def _safe_events(
+        self,
+        request: EventQuery,
+        warnings: list[SourceWarning],
+        source: str,
+    ) -> list[dict[str, JsonValue]]:
+        if self._event_reader is None:
+            return []
+        try:
+            return await self._event_reader.query_events(request)
+        except InspectionError as error:
+            warnings.append(SourceWarning(source=source, code=error.code))
+            return []
+
+    @staticmethod
+    def _event_record(row: dict[str, JsonValue], details: bool) -> EventRecord:
+        message = _clean(row.get("Message"))
+        return EventRecord(
+            timestamp=_datetime(row.get("Timestamp")),
+            level=_clean(row.get("Level"))
+            or _EVENT_LEVELS.get(_integer(row.get("LevelCode")) or 0),
+            provider=_clean(row.get("Provider")),
+            event_id=_integer(row.get("EventId")),
+            channel=_clean(row.get("Channel")),
+            summary=WindowsInspectionProvider._summary(message),
+            details=(
+                EventDetails(
+                    full_message=message,
+                    record_id=_integer(row.get("RecordId")),
+                    task=_clean(row.get("Task")),
+                    opcode=_clean(row.get("Opcode")),
+                    process_id=_integer(row.get("ProcessId")),
+                    thread_id=_integer(row.get("ThreadId")),
+                    activity_id=_clean(row.get("ActivityId")),
+                    event_data=WindowsInspectionProvider._event_data(row),
+                )
+                if details
+                else None
+            ),
+        )
+
     @staticmethod
     def _software_entry(row: dict[str, JsonValue], details: bool) -> SoftwareEntry:
         name = _clean(row.get("DisplayName"))
@@ -1523,6 +1811,188 @@ class WindowsInspectionProvider:
     def _calendar_date(value: JsonValue | None) -> date | None:
         timestamp = _datetime(value)
         return timestamp.date() if timestamp is not None else None
+
+    @staticmethod
+    def _event_data(row: dict[str, JsonValue] | None) -> dict[str, JsonValue]:
+        if row is None:
+            return {}
+        value = row.get("EventData")
+        return value if isinstance(value, dict) else {}
+
+    @staticmethod
+    def _event_value(data: dict[str, JsonValue], *names: str) -> str | None:
+        normalized = {key.casefold(): value for key, value in data.items()}
+        for name in names:
+            value = _clean(normalized.get(name.casefold()))
+            if value is not None:
+                return value
+        return None
+
+    @classmethod
+    def _is_crash_event(cls, event_id: int | None, data: dict[str, JsonValue]) -> bool:
+        if event_id in {1000, 1002}:
+            return True
+        if event_id != 1001:
+            return False
+        event_name = cls._event_value(data, "EventName")
+        return event_name is not None and any(
+            marker in event_name.casefold() for marker in _WER_CRASH_MARKERS
+        )
+
+    @classmethod
+    def _crash_type(cls, event_id: int | None, data: dict[str, JsonValue]) -> str:
+        if event_id == 1000:
+            return "application crash"
+        if event_id == 1002:
+            return "application hang"
+        event_name = cls._event_value(data, "EventName")
+        return event_name or "Windows Error Reporting crash"
+
+    @classmethod
+    def _crash_application(
+        cls, event_id: int | None, data: dict[str, JsonValue]
+    ) -> str | None:
+        application = cls._event_value(
+            data, "AppName", "FaultingApplicationName", "ApplicationName"
+        )
+        if application is not None or event_id != 1001:
+            return application
+        event_name = (cls._event_value(data, "EventName") or "").casefold()
+        if any(marker in event_name for marker in ("app", "bex", "crashpad", "radar")):
+            return cls._event_value(data, "P1")
+        return None
+
+    @classmethod
+    def _crash_module(
+        cls, event_id: int | None, data: dict[str, JsonValue]
+    ) -> str | None:
+        module = cls._event_value(
+            data, "ModuleName", "FaultingModuleName", "FaultModuleName"
+        )
+        if module is not None:
+            return module
+        event_name = (cls._event_value(data, "EventName") or "").casefold()
+        return cls._event_value(data, "P4") if event_id == 1001 and "appcrash" in event_name else None
+
+    @classmethod
+    def _crash_exception_code(
+        cls, event_id: int | None, data: dict[str, JsonValue]
+    ) -> str | None:
+        code = cls._event_value(data, "ExceptionCode")
+        if code is not None:
+            return code
+        event_name = (cls._event_value(data, "EventName") or "").casefold()
+        return cls._event_value(data, "P7") if event_id == 1001 and "appcrash" in event_name else None
+
+    @classmethod
+    def _crash_module_version(
+        cls, event_id: int | None, data: dict[str, JsonValue]
+    ) -> str | None:
+        version = cls._event_value(data, "ModuleVersion", "FaultingModuleVersion")
+        if version is not None:
+            return version
+        event_name = (cls._event_value(data, "EventName") or "").casefold()
+        return cls._event_value(data, "P5") if event_id == 1001 and "appcrash" in event_name else None
+
+    @classmethod
+    def _crash_exception_offset(
+        cls, event_id: int | None, data: dict[str, JsonValue]
+    ) -> str | None:
+        offset = cls._event_value(data, "ExceptionOffset")
+        if offset is not None:
+            return offset
+        event_name = (cls._event_value(data, "EventName") or "").casefold()
+        return cls._event_value(data, "P8") if event_id == 1001 and "appcrash" in event_name else None
+
+    @classmethod
+    def _crash_application_version(
+        cls, event_id: int | None, data: dict[str, JsonValue]
+    ) -> str | None:
+        version = cls._event_value(data, "AppVersion", "ApplicationVersion")
+        if version is not None:
+            return version
+        if event_id != 1001:
+            return None
+        event_name = (cls._event_value(data, "EventName") or "").casefold()
+        if "moapphang" in event_name:
+            return cls._event_value(data, "P3")
+        if any(marker in event_name for marker in ("appcrash", "bex", "crashpad", "radar")):
+            return cls._event_value(data, "P2")
+        return None
+
+    @staticmethod
+    def _crash_metadata(data: dict[str, JsonValue]) -> dict[str, JsonValue]:
+        normalized = {key.casefold(): (key, value) for key, value in data.items()}
+        result: dict[str, JsonValue] = {}
+        for field in _CRASH_METADATA_FIELDS:
+            entry = normalized.get(field.casefold())
+            if entry is None:
+                continue
+            original_key, value = entry
+            if value is not None and value != "":
+                result[original_key] = value
+        return result
+
+    @staticmethod
+    def _summary(message: str | None) -> str | None:
+        if message is None:
+            return None
+        summary = " ".join(message.split())
+        return summary if len(summary) <= 240 else f"{summary[:237]}..."
+
+    @staticmethod
+    def _boot_times(
+        rows: list[dict[str, JsonValue]], last_boot: datetime | None
+    ) -> list[datetime]:
+        kernel_starts = sorted(
+            (
+                timestamp
+                for row in rows
+                if _integer(row.get("EventId")) == 12
+                if (timestamp := _datetime(row.get("Timestamp"))) is not None
+            ),
+            reverse=True,
+        )
+        event_log_starts = sorted(
+            (
+                timestamp
+                for row in rows
+                if _integer(row.get("EventId")) == 6005
+                if (timestamp := _datetime(row.get("Timestamp"))) is not None
+            ),
+            reverse=True,
+        )
+        candidates = ([last_boot] if last_boot is not None else []) + kernel_starts + event_log_starts
+        result: list[datetime] = []
+        for timestamp in candidates:
+            if not any(abs((timestamp - existing).total_seconds()) < 300 for existing in result):
+                result.append(timestamp)
+        result.sort(reverse=True)
+        return result[:10]
+
+    @staticmethod
+    def _previous_shutdown(
+        rows: list[dict[str, JsonValue]], boot_times: list[datetime]
+    ) -> Literal["normal", "unexpected"] | None:
+        shutdowns = [
+            (timestamp, event_id)
+            for row in rows
+            if (event_id := _integer(row.get("EventId"))) in {13, 41, 6006, 6008}
+            if (timestamp := _datetime(row.get("Timestamp"))) is not None
+        ]
+        if not shutdowns:
+            return None
+        current_boot = boot_times[0] if boot_times else None
+        if current_boot is not None:
+            plausible = [
+                item
+                for item in shutdowns
+                if item[0] <= current_boot or (item[0] - current_boot).total_seconds() < 600
+            ]
+            if plausible:
+                shutdowns = plausible
+        _, event_id = max(shutdowns, key=lambda item: item[0])
+        return "unexpected" if event_id in {41, 6008} else "normal"
 
     @staticmethod
     def _memory_module(row: dict[str, JsonValue]) -> MemoryModule:

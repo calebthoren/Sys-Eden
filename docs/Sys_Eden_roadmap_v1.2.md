@@ -17,23 +17,25 @@ configuration and independent storage budgets, structured logging, SQLite/WAL an
 transactional sessions, packaged Alembic baseline, in-process async events,
 fake-provider health, and CLI bootstrap. Validation: 15 tests, Ruff, Pyright,
 `uv sync`, CLI help/health, package build, and isolated packaged bootstrap.
-The current implementation milestone is Milestone 2, read-only Windows inspection.
-Its first slice adds OS/build/boot timestamps, CPU, and RAM collectors, a
-parameterized CIM reader for those provider classes, and the `eden inspect` CLI.
-The current refinement standardizes these collectors around typed domain models,
-separate human/JSON presentation, concise default output, curated `--details`,
-honest unavailable values, consistent units, partial-source warnings, and clearly
-labeled evidence observations. `system`, `cpu`, `ram`, `gpu`, and `storage` have
-been migrated. GPU and storage deliberately preserve unavailable values where
-standard Windows providers cannot supply reliable telemetry or health counters.
-`network` now provides local adapter identity, connection/IP/DNS state, and
-curated DHCP/driver/route details without external address lookup.
-`processes` provides resource-ranked current state with permission-tolerant
-details, and `services` provides compact state/startup inventory plus curated
-details. `startup`, `drivers`, and registry-based `software` inventory are now
-implemented without Windows Installer side effects. Remaining work includes
-services, startup, drivers, software, event logs, crashes, and broader generic
-read interfaces. Milestone 2 acceptance has not yet been reached.
+Milestone 2, read-only Windows inspection, has passed its acceptance criteria.
+The `eden inspect` surface now covers system, CPU, RAM, GPU, storage, network,
+processes, services, startup items, drivers, installed software, recent events,
+recent crashes, and boot evidence. Collectors return typed domain models with
+separate concise human, curated `--details`, and structured `--json` output.
+Unavailable or unsupported values remain explicit, partial-source failures are
+preserved as warnings, and derived findings are labeled as observations rather
+than diagnoses.
+
+The Windows adapter provides bounded, allowlisted generic CIM and Event Log read
+interfaces and a side-effect-free uninstall-registry reader. Event and boot
+queries use provider scoping where Windows reuses numeric event IDs. Crash
+collection excludes unrelated Windows Error Reporting records and does not assign
+generic WER parameters a meaning outside known report schemas. All inspection
+runs in the current user's context, performs no mutation or external IP lookup,
+and does not grant a model administrator execution. Validation covers 46 tests,
+Ruff, Pyright, live collector smoke tests, and a structured all-component
+snapshot. Milestone 3, structured reports and knowledge history, is next; its
+implementation has not started.
 The repository retains the initial `src/sys_eden/` package spelling.
 
 

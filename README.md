@@ -1,6 +1,7 @@
 # Sys Eden
 
-Local-first Windows system companion, currently implementing Milestone 2 (inspection).
+Local-first Windows system companion. Milestone 2 read-only inspection is complete;
+Milestone 3 structured reports and knowledge history is next in roadmap order.
 
 Read [AGENTS.md](AGENTS.md) and the versioned canonical documents in [docs](docs/).
 The roadmap owns implementation order.
@@ -45,6 +46,9 @@ uv run eden inspect services
 uv run eden inspect startup
 uv run eden inspect drivers
 uv run eden inspect software
+uv run eden inspect events
+uv run eden inspect crashes
+uv run eden inspect boot
 uv run eden inspect ram --details
 uv run eden inspect system --json
 ```
@@ -85,4 +89,16 @@ status; the human view shows 50 records while `--json` contains the full result.
 Installed software is read from machine/user uninstall registry keys without
 using `Win32_Product`; the human view shows 100 records while `--json` contains
 the full result. Registry install dates are preserved as calendar dates.
-The remaining collectors and broader generic readers are unfinished Milestone 2 work.
+Event inspection is bounded to recent critical, error, and warning records from
+the System and Application logs. Crash inspection groups recent application,
+hang, crash-class Windows Error Reporting, and LiveKernel records without
+assigning meanings to provider-specific fields that Windows does not define for
+that report type. Boot inspection uses provider-scoped event IDs so unrelated
+events with the same numeric ID are not treated as boot evidence. Detailed event
+output remains structured and does not expose raw XML.
+
+The Milestone 2 snapshot is built through typed specialized collectors plus
+bounded generic CIM and Event Log readers and a side-effect-free registry
+inventory reader. It runs as the current user and performs no mutation or
+administrator-level AI execution. Values that need a more reliable provider,
+extra permission, or vendor telemetry remain explicitly unavailable.

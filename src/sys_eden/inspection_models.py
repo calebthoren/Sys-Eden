@@ -4,7 +4,7 @@ from datetime import date as Date
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
 
 class InspectionModel(BaseModel):
@@ -563,6 +563,84 @@ class SoftwareInspection(InspectionModel):
     warnings: list[SourceWarning] = Field(default_factory=list)
 
 
+class EventDetails(InspectionModel):
+    full_message: str | None = None
+    record_id: int | None = None
+    task: str | None = None
+    opcode: str | None = None
+    process_id: int | None = None
+    thread_id: int | None = None
+    activity_id: str | None = None
+    event_data: dict[str, JsonValue] = Field(default_factory=dict)
+
+
+class EventRecord(InspectionModel):
+    timestamp: datetime | None = None
+    level: str | None = None
+    provider: str | None = None
+    event_id: int | None = None
+    channel: str | None = None
+    summary: str | None = None
+    details: EventDetails | None = None
+
+
+class EventsInspection(InspectionModel):
+    kind: Literal["events"] = "events"
+    filter_description: str
+    events: list[EventRecord] = Field(default_factory=list)
+    observations: list[Observation] = Field(default_factory=list)
+    warnings: list[SourceWarning] = Field(default_factory=list)
+
+
+class CrashDetails(InspectionModel):
+    faulting_module_version: str | None = None
+    faulting_module_path: str | None = None
+    exception_offset: str | None = None
+    report_id: str | None = None
+    bucket_id: str | None = None
+    event_id: int | None = None
+    record_id: int | None = None
+    application_version: str | None = None
+    event_data: dict[str, JsonValue] = Field(default_factory=dict)
+
+
+class CrashRecord(InspectionModel):
+    timestamp: datetime | None = None
+    affected_application: str | None = None
+    crash_type: str | None = None
+    faulting_module: str | None = None
+    exception_code: str | None = None
+    recurrence_count: int = 1
+    details: CrashDetails | None = None
+
+
+class CrashesInspection(InspectionModel):
+    kind: Literal["crashes"] = "crashes"
+    crashes: list[CrashRecord] = Field(default_factory=list)
+    observations: list[Observation] = Field(default_factory=list)
+    warnings: list[SourceWarning] = Field(default_factory=list)
+
+
+class BootEvidence(InspectionModel):
+    timestamp: datetime | None = None
+    event_id: int | None = None
+    channel: str | None = None
+    record_id: int | None = None
+    summary: str | None = None
+
+
+class BootInspection(InspectionModel):
+    kind: Literal["boot"] = "boot"
+    recent_boot_times: list[datetime] = Field(default_factory=list)
+    current_uptime_seconds: float | None = None
+    previous_shutdown: Literal["normal", "unexpected"] | None = None
+    latest_boot_duration_ms: int | None = None
+    startup_warnings: list[EventRecord] = Field(default_factory=list)
+    evidence: list[BootEvidence] | None = None
+    observations: list[Observation] = Field(default_factory=list)
+    warnings: list[SourceWarning] = Field(default_factory=list)
+
+
 InspectionData = (
     SystemInspection
     | CpuInspection
@@ -575,4 +653,7 @@ InspectionData = (
     | StartupInspection
     | DriversInspection
     | SoftwareInspection
+    | EventsInspection
+    | CrashesInspection
+    | BootInspection
 )

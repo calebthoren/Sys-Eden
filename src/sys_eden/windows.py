@@ -8,7 +8,7 @@ from pathlib import Path
 
 from pydantic import JsonValue, TypeAdapter, ValidationError
 
-from sys_eden.inspection import CimQuery, InspectionError
+from sys_eden.inspection import CimQuery, EventQuery, InspectionError
 
 _ROWS = TypeAdapter(list[dict[str, JsonValue]])
 _SCRIPT = """
@@ -56,6 +56,65 @@ $rows = foreach ($root in $roots) {
 ConvertTo-Json -InputObject @($rows) -Depth 4 -Compress
 """
 
+_EVENT_SCRIPT = """
+$ErrorActionPreference = 'Stop'
+[Console]::InputEncoding = [Text.UTF8Encoding]::new($false)
+[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
+$request = [Console]::In.ReadToEnd() | ConvertFrom-Json
+$filter = @{
+    LogName = @($request.log_names)
+    StartTime = (Get-Date).AddHours(-[double]$request.since_hours)
+}
+if (@($request.event_ids).Count -gt 0) { $filter.Id = @($request.event_ids) }
+if (@($request.levels).Count -gt 0) { $filter.Level = @($request.levels) }
+if (@($request.provider_names).Count -gt 0) { $filter.ProviderName = @($request.provider_names) }
+$events = @()
+try {
+    $events = @(Get-WinEvent -FilterHashtable $filter -MaxEvents $request.limit -ErrorAction Stop)
+} catch {
+    if ($_.FullyQualifiedErrorId -notlike 'NoMatchingEventsFound*') { exit 1 }
+}
+$rows = foreach ($event in $events) {
+    $eventData = @{}
+    $processId = $null
+    $threadId = $null
+    $activityId = $null
+    if ($request.include_event_data) {
+        try {
+            [xml]$eventXml = $event.ToXml()
+            $index = 0
+            foreach ($node in @($eventXml.Event.EventData.Data)) {
+                $key = if ($node.Name) { [string]$node.Name } else { "value_$index" }
+                $eventData[$key] = [string]$node.InnerText
+                $index++
+            }
+            $processId = $eventXml.Event.System.Execution.ProcessID
+            $threadId = $eventXml.Event.System.Execution.ThreadID
+            $activityId = $eventXml.Event.System.Correlation.ActivityID
+        } catch {}
+    }
+    $message = $null
+    try { $message = $event.Message } catch {}
+    [PSCustomObject]@{
+        Timestamp = if ($event.TimeCreated) { $event.TimeCreated.ToUniversalTime().ToString('o') } else { $null }
+        Level = $event.LevelDisplayName
+        LevelCode = $event.Level
+        Provider = $event.ProviderName
+        EventId = $event.Id
+        Channel = $event.LogName
+        Message = $message
+        RecordId = $event.RecordId
+        Task = $event.TaskDisplayName
+        Opcode = $event.OpcodeDisplayName
+        ProcessId = $processId
+        ThreadId = $threadId
+        ActivityId = $activityId
+        EventData = $eventData
+    }
+}
+ConvertTo-Json -InputObject @($rows) -Depth 8 -Compress
+"""
+
 
 class WindowsCimReader:
     async def query(self, request: CimQuery) -> list[dict[str, JsonValue]]:
@@ -67,6 +126,13 @@ class WindowsCimReader:
 
     async def installed_software(self) -> list[dict[str, JsonValue]]:
         stdout = await self._execute(_SOFTWARE_SCRIPT, b"")
+        try:
+            return _ROWS.validate_json(stdout)
+        except ValidationError as error:
+            raise InspectionError("InvalidToolOutput") from error
+
+    async def query_events(self, request: EventQuery) -> list[dict[str, JsonValue]]:
+        stdout = await self._execute(_EVENT_SCRIPT, request.model_dump_json().encode("utf-8"))
         try:
             return _ROWS.validate_json(stdout)
         except ValidationError as error:

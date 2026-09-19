@@ -1,11 +1,16 @@
 """Human CLI presentation for structured inspection data."""
 
+import sys
+import unicodedata
 from datetime import date, datetime
 
 from sys_eden.inspection import InspectionResult
 from sys_eden.inspection_models import (
+    BootInspection,
     CpuInspection,
+    CrashesInspection,
     DriversInspection,
+    EventsInspection,
     GpuInspection,
     MemoryInspection,
     NetworkInspection,
@@ -93,7 +98,13 @@ def _text(value: object | None) -> str:
         return UNAVAILABLE
     if isinstance(value, bool):
         return "yes" if value else "no"
-    return str(value)
+    text = "".join(
+        " " if character.isspace() else character
+        for character in str(value)
+        if unicodedata.category(character) not in {"Cc", "Cf", "Cs"}
+        or character.isspace()
+    )
+    return " ".join(text.split()) or UNAVAILABLE
 
 
 def _section(title: str, rows: list[tuple[str, str]]) -> list[str]:
@@ -113,6 +124,9 @@ def _footer(
         | StartupInspection
         | DriversInspection
         | SoftwareInspection
+        | EventsInspection
+        | CrashesInspection
+        | BootInspection
     ),
 ) -> list[str]:
     lines: list[str] = []
@@ -725,6 +739,117 @@ def _software(data: SoftwareInspection) -> list[str]:
     return lines + _footer(data)
 
 
+def _events(data: EventsInspection) -> list[str]:
+    lines = ["Events", "Filter", f"  {data.filter_description}", "Recent events"]
+    if not data.events:
+        lines.append("  No matching events found.")
+    for event in data.events:
+        lines.append(
+            "  "
+            f"{format_timestamp(event.timestamp)} | {_text(event.level)} | "
+            f"{_text(event.provider)} | ID {_text(event.event_id)} | "
+            f"{_text(event.channel)} | {_text(event.summary)}"
+        )
+        if event.details:
+            item = event.details
+            lines += _section(
+                f"Event {_text(event.event_id)} - Details",
+                [
+                    ("Full message", _text(item.full_message)),
+                    ("Record ID", _text(item.record_id)),
+                    ("Task", _text(item.task)),
+                    ("Opcode", _text(item.opcode)),
+                    ("Process ID", _text(item.process_id)),
+                    ("Thread ID", _text(item.thread_id)),
+                    ("Activity ID", _text(item.activity_id)),
+                    ("Event data", _text(item.event_data or None)),
+                ],
+            )
+    return lines + _footer(data)
+
+
+def _crashes(data: CrashesInspection) -> list[str]:
+    lines = ["Crashes", "Recent crash groups"]
+    if not data.crashes:
+        lines.append("  No matching application crash events found in the last 30 days.")
+    for index, crash in enumerate(data.crashes, start=1):
+        lines += _section(
+            f"Crash group {index}",
+            [
+                ("Latest timestamp", format_timestamp(crash.timestamp)),
+                ("Application/process", _text(crash.affected_application)),
+                ("Type", _text(crash.crash_type)),
+                ("Faulting module", _text(crash.faulting_module)),
+                ("Exception/error code", _text(crash.exception_code)),
+                ("Recurrence count", _text(crash.recurrence_count)),
+            ],
+        )
+        if crash.details:
+            item = crash.details
+            lines += _section(
+                f"Crash group {index} - Details",
+                [
+                    ("Module version", _text(item.faulting_module_version)),
+                    ("Module path", _text(item.faulting_module_path)),
+                    ("Exception offset", _text(item.exception_offset)),
+                    ("Report ID", _text(item.report_id)),
+                    ("Bucket ID", _text(item.bucket_id)),
+                    ("Event ID", _text(item.event_id)),
+                    ("Record ID", _text(item.record_id)),
+                    ("Application version", _text(item.application_version)),
+                    ("Event data", _text(item.event_data or None)),
+                ],
+            )
+    return lines + _footer(data)
+
+
+def _boot(data: BootInspection) -> list[str]:
+    duration = (
+        UNAVAILABLE
+        if data.latest_boot_duration_ms is None
+        else f"{data.latest_boot_duration_ms / 1000:.2f} s"
+    )
+    lines = ["Boot"]
+    lines += _section(
+        "Current state",
+        [
+            ("Uptime", format_duration(data.current_uptime_seconds)),
+            ("Previous shutdown", _text(data.previous_shutdown)),
+            ("Latest measured boot duration", duration),
+        ],
+    )
+    lines += _section(
+        "Recent boot timestamps",
+        [
+            (str(index), format_timestamp(timestamp))
+            for index, timestamp in enumerate(data.recent_boot_times, start=1)
+        ]
+        or [("Boots", "unavailable")],
+    )
+    lines.append("Startup warnings")
+    if not data.startup_warnings:
+        lines.append("  No matching boot-performance warnings found.")
+    for event in data.startup_warnings:
+        lines.append(
+            "  "
+            f"{format_timestamp(event.timestamp)} | ID {_text(event.event_id)} | "
+            f"{_text(event.summary)}"
+        )
+    if data.evidence is not None:
+        for index, evidence in enumerate(data.evidence, start=1):
+            lines += _section(
+                f"Evidence {index}",
+                [
+                    ("Timestamp", format_timestamp(evidence.timestamp)),
+                    ("Event ID", _text(evidence.event_id)),
+                    ("Channel", _text(evidence.channel)),
+                    ("Record ID", _text(evidence.record_id)),
+                    ("Summary", _text(evidence.summary)),
+                ],
+            )
+    return lines + _footer(data)
+
+
 def render_human(result: InspectionResult) -> str:
     if not result.success or result.data is None:
         return f"{result.capability.title()}\nError: {result.error or 'unknown'}"
@@ -748,6 +873,14 @@ def render_human(result: InspectionResult) -> str:
         lines = _startup(result.data)
     elif isinstance(result.data, DriversInspection):
         lines = _drivers(result.data)
-    else:
+    elif isinstance(result.data, SoftwareInspection):
         lines = _software(result.data)
-    return "\n".join(lines)
+    elif isinstance(result.data, EventsInspection):
+        lines = _events(result.data)
+    elif isinstance(result.data, CrashesInspection):
+        lines = _crashes(result.data)
+    else:
+        lines = _boot(result.data)
+    rendered = "\n".join(lines)
+    encoding = sys.stdout.encoding or "utf-8"
+    return rendered.encode(encoding, errors="replace").decode(encoding, errors="replace")

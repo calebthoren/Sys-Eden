@@ -8,7 +8,13 @@ from pydantic import JsonValue, ValidationError
 from typer.testing import CliRunner
 
 from sys_eden.cli import app
-from sys_eden.inspection import CimQuery, InspectionError, InspectionResult, collect
+from sys_eden.inspection import (
+    CimQuery,
+    EventQuery,
+    InspectionError,
+    InspectionResult,
+    collect,
+)
 from sys_eden.inspection_format import (
     UNAVAILABLE,
     format_bytes,
@@ -20,6 +26,9 @@ from sys_eden.inspection_models import (
     CpuIdentity,
     CpuInspection,
     CpuState,
+    EventDetails,
+    EventRecord,
+    EventsInspection,
     SystemIdentity,
     SystemInspection,
     SystemState,
@@ -370,6 +379,120 @@ class FixtureReader:
             }
         ]
 
+    async def query_events(self, request: EventQuery) -> list[dict[str, JsonValue]]:
+        if request.log_names == ["Application"]:
+            return [
+                {
+                    "Timestamp": "2026-01-03T12:00:00Z",
+                    "Level": "Error",
+                    "Provider": "Application Error",
+                    "EventId": 1000,
+                    "Channel": "Application",
+                    "Message": "Fixture application crashed.",
+                    "RecordId": 100,
+                    "EventData": {
+                        "AppName": "fixture.exe",
+                        "AppVersion": "1.2.3",
+                        "ModuleName": "fixture.dll",
+                        "ModuleVersion": "4.5.6",
+                        "ExceptionCode": "0xc0000005",
+                        "ExceptionOffset": "0x10",
+                    },
+                },
+                {
+                    "Timestamp": "2026-01-02T12:00:00Z",
+                    "Level": "Error",
+                    "Provider": "Application Error",
+                    "EventId": 1000,
+                    "Channel": "Application",
+                    "Message": "Fixture application crashed again.",
+                    "RecordId": 90,
+                    "EventData": {
+                        "AppName": "fixture.exe",
+                        "ModuleName": "fixture.dll",
+                        "ExceptionCode": "0xc0000005",
+                    },
+                },
+        ]
+        if request.log_names == ["System"] and request.event_ids:
+            if request.provider_names == ["Microsoft-Windows-Kernel-General"]:
+                return [
+                    {
+                        "Timestamp": "2026-01-03T09:59:50Z",
+                        "Level": "Information",
+                        "Provider": "Microsoft-Windows-Kernel-General",
+                        "EventId": 12,
+                        "Channel": "System",
+                        "Message": "The operating system started.",
+                        "RecordId": 201,
+                        "EventData": {},
+                    }
+                ]
+            if request.provider_names and request.provider_names != ["EventLog"]:
+                return []
+            return [
+                {
+                    "Timestamp": "2026-01-03T10:00:00Z",
+                    "Level": "Information",
+                    "Provider": "EventLog",
+                    "EventId": 6005,
+                    "Channel": "System",
+                    "Message": "Event Log service started.",
+                    "RecordId": 200,
+                    "EventData": {},
+                },
+                {
+                    "Timestamp": "2026-01-03T09:55:00Z",
+                    "Level": "Information",
+                    "Provider": "EventLog",
+                    "EventId": 6006,
+                    "Channel": "System",
+                    "Message": "Event Log service stopped.",
+                    "RecordId": 199,
+                    "EventData": {},
+                },
+            ]
+        if request.log_names == ["Microsoft-Windows-Diagnostics-Performance/Operational"]:
+            return [
+                {
+                    "Timestamp": "2026-01-03T10:00:30Z",
+                    "Level": "Information",
+                    "Provider": "Diagnostics-Performance",
+                    "EventId": 100,
+                    "Channel": request.log_names[0],
+                    "Message": "Windows started.",
+                    "RecordId": 300,
+                    "EventData": {"BootTime": "12345"},
+                },
+                {
+                    "Timestamp": "2026-01-03T10:00:31Z",
+                    "Level": "Warning",
+                    "Provider": "Diagnostics-Performance",
+                    "EventId": 101,
+                    "Channel": request.log_names[0],
+                    "Message": "An application delayed startup.",
+                    "RecordId": 301,
+                    "EventData": {"FileName": "fixture.exe"},
+                },
+            ]
+        return [
+            {
+                "Timestamp": "2026-01-03T11:00:00Z",
+                "Level": "Warning",
+                "Provider": "Fixture Provider",
+                "EventId": 7,
+                "Channel": "System",
+                "Message": "A fixture warning.\nAdditional context.",
+                "RecordId": 400,
+                "Task": "Fixture Task",
+                "Opcode": "Info",
+                "ProcessId": 10,
+                "ThreadId": 20,
+                "ActivityId": "fixture-activity",
+                "EventData": {"Device": "fixture"},
+            }
+        ]
+
 
 def test_generic_query_rejects_mutating_provider_and_script_properties():
     with pytest.raises(ValidationError):
@@ -611,6 +734,112 @@ async def test_software_uses_registry_inventory_without_installer_provider():
 
 
 @pytest.mark.asyncio
+async def test_events_use_bounded_relevant_filter_and_curated_details():
+    reader = FixtureReader()
+    provider = WindowsInspectionProvider(reader, event_reader=reader)
+    basic = await provider.events(details=False)
+    assert "last 24 hours" in basic.filter_description
+    assert basic.events[0].summary == "A fixture warning. Additional context."
+    assert basic.events[0].details is None
+
+    detailed = await provider.events(details=True)
+    assert detailed.events[0].details is not None
+    assert detailed.events[0].details.record_id == 400
+    assert detailed.events[0].details.event_data == {"Device": "fixture"}
+
+
+@pytest.mark.asyncio
+async def test_crashes_group_matching_events_without_claiming_causality():
+    reader = FixtureReader()
+    result = await WindowsInspectionProvider(reader, event_reader=reader).crashes(details=True)
+    assert len(result.crashes) == 1
+    crash = result.crashes[0]
+    assert crash.affected_application == "fixture.exe"
+    assert crash.faulting_module == "fixture.dll"
+    assert crash.exception_code == "0xc0000005"
+    assert crash.recurrence_count == 2
+    assert crash.details is not None
+    assert crash.details.application_version == "1.2.3"
+
+
+@pytest.mark.asyncio
+async def test_crashes_filter_unrelated_wer_and_do_not_guess_kernel_fields():
+    class WerReader(FixtureReader):
+        async def query_events(self, request: EventQuery) -> list[dict[str, JsonValue]]:
+            return [
+                {
+                    "Timestamp": "2026-01-03T12:00:00Z",
+                    "EventId": 1001,
+                    "EventData": {"EventName": "StoreAgentInstallFailure1", "P1": "Update"},
+                },
+                {
+                    "Timestamp": "2026-01-03T11:00:00Z",
+                    "EventId": 1001,
+                    "RecordId": 80,
+                    "EventData": {
+                        "EventName": "LiveKernelEvent",
+                        "P1": "193",
+                        "P4": "ffff0000",
+                        "P7": "0_0",
+                        "HashedBucket": "fixture-bucket",
+                    },
+                },
+            ]
+
+    result = await WindowsInspectionProvider(WerReader(), event_reader=WerReader()).crashes(
+        details=True
+    )
+    assert len(result.crashes) == 1
+    crash = result.crashes[0]
+    assert crash.crash_type == "LiveKernelEvent"
+    assert crash.affected_application is None
+    assert crash.faulting_module is None
+    assert crash.exception_code is None
+    assert crash.details is not None
+    assert crash.details.bucket_id == "fixture-bucket"
+    assert crash.details.event_data == {
+        "EventName": "LiveKernelEvent",
+        "HashedBucket": "fixture-bucket",
+    }
+
+
+def test_human_event_output_sanitizes_console_direction_markers():
+    data = EventsInspection(
+        filter_description="fixture",
+        events=[
+            EventRecord(
+                summary="A \u200edirectional marker",
+                details=EventDetails(full_message="Line one\nLine two \u200evalue"),
+            )
+        ],
+    )
+    timestamp = datetime.now(UTC)
+    rendered = render_human(
+        InspectionResult(
+            capability="events",
+            started_at=timestamp,
+            finished_at=timestamp,
+            success=True,
+            data=data,
+        )
+    )
+    assert "\u200e" not in rendered
+    assert "Line one Line two value" in rendered
+
+
+@pytest.mark.asyncio
+async def test_boot_correlates_records_as_evidence_and_reports_duration():
+    reader = FixtureReader()
+    result = await WindowsInspectionProvider(reader, event_reader=reader).boot(details=True)
+    assert result.previous_shutdown == "normal"
+    assert result.latest_boot_duration_ms == 12345
+    assert result.recent_boot_times[0] == datetime(2026, 1, 3, 9, 59, 50, tzinfo=UTC)
+    assert result.startup_warnings[0].event_id == 101
+    assert result.evidence is not None
+    assert any(item.event_id == 6005 for item in result.evidence)
+
+
+@pytest.mark.asyncio
 async def test_partial_source_failure_is_reported_without_losing_other_evidence():
     class PartialReader(FixtureReader):
         async def query(self, request: CimQuery) -> list[dict[str, JsonValue]]:
@@ -658,6 +887,15 @@ async def test_collect_wraps_provider_failure():
             raise InspectionError("PermissionDenied")
 
         async def software(self, *, details: bool):
+            raise InspectionError("PermissionDenied")
+
+        async def events(self, *, details: bool):
+            raise InspectionError("PermissionDenied")
+
+        async def crashes(self, *, details: bool):
+            raise InspectionError("PermissionDenied")
+
+        async def boot(self, *, details: bool):
             raise InspectionError("PermissionDenied")
 
     result = await collect("cpu", Provider(), details=False)
@@ -795,3 +1033,35 @@ async def test_windows_software_reader_validates_structured_output(
     await_call = execute.await_args
     assert await_call is not None
     assert await_call.args[1] == b""
+
+
+def test_event_query_rejects_unbounded_or_arbitrary_logs():
+    with pytest.raises(ValidationError):
+        EventQuery.model_validate(
+            {"log_names": ["Security"], "since_hours": 24, "limit": 50}
+        )
+    with pytest.raises(ValidationError):
+        EventQuery(log_names=["System"], since_hours=24, limit=501)
+    with pytest.raises(ValidationError):
+        EventQuery.model_validate(
+            {
+                "log_names": ["System"],
+                "provider_names": ["Untrusted Provider"],
+                "since_hours": 24,
+                "limit": 10,
+            }
+        )
+
+
+@pytest.mark.asyncio
+async def test_windows_event_reader_validates_structured_output(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    reader = WindowsCimReader()
+    execute = AsyncMock(return_value=b'[{"EventId":7,"Channel":"System"}]')
+    monkeypatch.setattr(reader, "_execute", execute)
+    request = EventQuery(log_names=["System"], since_hours=24, limit=10)
+    assert await reader.query_events(request) == [{"EventId": 7, "Channel": "System"}]
+    await_call = execute.await_args
+    assert await_call is not None
+    assert json.loads(await_call.args[1])["limit"] == 10
