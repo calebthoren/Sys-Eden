@@ -85,8 +85,27 @@ class FixtureReader:
             "Win32_VideoController": [
                 {
                     "Name": "Fixture GPU",
+                    "AdapterCompatibility": "Fixture Graphics",
+                    "DriverVersion": "1.2.3",
+                    "DriverDate": "/Date(1735689600000)/",
                     "CurrentHorizontalResolution": 2560,
                     "CurrentVerticalResolution": 1440,
+                    "CurrentRefreshRate": 144,
+                    "Status": "OK",
+                    "ConfigManagerErrorCode": 0,
+                    "PNPDeviceID": "PCI\\VEN_FIXTURE",
+                    "DeviceID": "VideoController1",
+                    "VideoProcessor": "Fixture Processor",
+                }
+            ],
+            "Win32_PnPSignedDriver": [
+                {
+                    "DeviceID": "PCI\\VEN_FIXTURE",
+                    "DriverProviderName": "Fixture Driver Provider",
+                    "DriverVersion": "1.2.3",
+                    "DriverDate": "/Date(1735689600000)/",
+                    "InfName": "fixture.inf",
+                    "IsSigned": True,
                 }
             ],
             "Win32_LogicalDisk": [
@@ -143,6 +162,40 @@ class FixtureReader:
                     "ConfiguredVoltage": 1250,
                     "SerialNumber": "SERIAL-B",
                 },
+            ],
+            "MSFT_PhysicalDisk": [
+                {
+                    "DeviceId": "0",
+                    "FriendlyName": "Fixture NVMe",
+                    "MediaType": 4,
+                    "BusType": 17,
+                    "Size": 1000,
+                    "HealthStatus": 0,
+                    "OperationalStatus": [2],
+                    "SerialNumber": "DISK-SERIAL",
+                    "FirmwareVersion": "FW1",
+                }
+            ],
+            "MSFT_Disk": [
+                {
+                    "Number": 0,
+                    "FriendlyName": "Fixture NVMe",
+                    "PartitionStyle": 2,
+                    "UniqueId": "fixture-id",
+                    "SerialNumber": "DISK-SERIAL",
+                }
+            ],
+            "MSFT_Volume": [
+                {
+                    "DriveLetter": "C",
+                    "FileSystemLabel": "System",
+                    "FileSystem": "NTFS",
+                    "Size": 1000,
+                    "SizeRemaining": 50,
+                    "HealthStatus": 0,
+                    "OperationalStatus": [2],
+                    "Path": "\\\\?\\Volume{fixture}\\",
+                }
             ],
         }
 
@@ -220,6 +273,45 @@ async def test_ram_default_omits_serial_and_details_decode_inventory():
 
 
 @pytest.mark.asyncio
+async def test_gpu_keeps_unreliable_telemetry_unavailable_and_adds_driver_details():
+    provider = WindowsInspectionProvider(FixtureReader())
+    basic = await provider.gpu(details=False)
+    assert len(basic.adapters) == 1
+    adapter = basic.adapters[0]
+    assert adapter.identity.name == "Fixture GPU"
+    assert adapter.identity.adapter_type == "hardware"
+    assert adapter.configuration.dedicated_vram_bytes is None
+    assert adapter.current_state.utilization_percent is None
+    assert adapter.current_state.primary
+    assert adapter.details is None
+
+    detailed = await provider.gpu(details=True)
+    assert detailed.adapters[0].details is not None
+    assert detailed.adapters[0].details.driver_provider == "Fixture Driver Provider"
+    assert detailed.adapters[0].details.driver_inf == "fixture.inf"
+    assert detailed.adapters[0].details.display_resolution == "2560x1440"
+
+
+@pytest.mark.asyncio
+async def test_storage_reports_disks_volumes_details_and_low_space_observation():
+    provider = WindowsInspectionProvider(FixtureReader())
+    basic = await provider.storage(details=False)
+    assert basic.physical_disks[0].configuration.media_type == "SSD"
+    assert basic.physical_disks[0].configuration.bus_type == "NVMe"
+    assert basic.physical_disks[0].details is None
+    assert basic.volumes[0].identity.drive_letter == "C:"
+    assert basic.volumes[0].current_state.used_bytes == 950
+    assert basic.observations[0].code == "low_volume_free_space"
+
+    detailed = await provider.storage(details=True)
+    assert detailed.physical_disks[0].details is not None
+    assert detailed.physical_disks[0].details.partition_style == "GPT"
+    assert detailed.physical_disks[0].details.serial_number == "DISK-SERIAL"
+    assert detailed.volumes[0].details is not None
+    assert detailed.volumes[0].details.encryption_status is None
+
+
+@pytest.mark.asyncio
 async def test_partial_source_failure_is_reported_without_losing_other_evidence():
     class PartialReader(FixtureReader):
         async def query(self, request: CimQuery) -> list[dict[str, JsonValue]]:
@@ -243,6 +335,12 @@ async def test_collect_wraps_provider_failure():
             raise InspectionError("PermissionDenied")
 
         async def ram(self, *, details: bool):
+            raise InspectionError("PermissionDenied")
+
+        async def gpu(self, *, details: bool):
+            raise InspectionError("PermissionDenied")
+
+        async def storage(self, *, details: bool):
             raise InspectionError("PermissionDenied")
 
     result = await collect("cpu", Provider(), details=False)

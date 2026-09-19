@@ -8,8 +8,10 @@ from pydantic import BaseModel, Field, JsonValue
 
 from sys_eden.inspection_models import (
     CpuInspection,
+    GpuInspection,
     InspectionData,
     MemoryInspection,
+    StorageInspection,
     SystemInspection,
 )
 
@@ -22,11 +24,19 @@ CimClass = Literal[
     "Win32_OperatingSystem",
     "Win32_PerfFormattedData_PerfOS_Processor",
     "Win32_PhysicalMemory",
+    "Win32_PnPSignedDriver",
     "Win32_Processor",
     "Win32_Tpm",
     "Win32_VideoController",
+    "MSFT_Disk",
+    "MSFT_PhysicalDisk",
+    "MSFT_Volume",
 ]
-CimNamespace = Literal["root/cimv2", "root/cimv2/Security/MicrosoftTpm"]
+CimNamespace = Literal[
+    "root/cimv2",
+    "root/cimv2/Security/MicrosoftTpm",
+    "root/Microsoft/Windows/Storage",
+]
 
 
 class CimQuery(BaseModel):
@@ -54,6 +64,10 @@ class InspectionProvider(Protocol):
 
     async def ram(self, *, details: bool) -> MemoryInspection: ...
 
+    async def gpu(self, *, details: bool) -> GpuInspection: ...
+
+    async def storage(self, *, details: bool) -> StorageInspection: ...
+
 
 class InspectionResult(BaseModel):
     request_id: str = Field(default_factory=lambda: str(uuid4()))
@@ -74,6 +88,10 @@ async def collect(name: str, provider: InspectionProvider, *, details: bool) -> 
             data = await provider.cpu(details=details)
         elif name == "ram":
             data = await provider.ram(details=details)
+        elif name == "gpu":
+            data = await provider.gpu(details=details)
+        elif name == "storage":
+            data = await provider.storage(details=details)
         else:
             raise InspectionError("CapabilityUnavailable")
     except InspectionError as error:

@@ -3,7 +3,13 @@
 from datetime import datetime
 
 from sys_eden.inspection import InspectionResult
-from sys_eden.inspection_models import CpuInspection, MemoryInspection, SystemInspection
+from sys_eden.inspection_models import (
+    CpuInspection,
+    GpuInspection,
+    MemoryInspection,
+    StorageInspection,
+    SystemInspection,
+)
 
 UNAVAILABLE = "unavailable"
 
@@ -68,7 +74,9 @@ def _section(title: str, rows: list[tuple[str, str]]) -> list[str]:
     return [title, *(f"  {label}: {value}" for label, value in rows)]
 
 
-def _footer(data: SystemInspection | CpuInspection | MemoryInspection) -> list[str]:
+def _footer(
+    data: SystemInspection | CpuInspection | MemoryInspection | GpuInspection | StorageInspection,
+) -> list[str]:
     lines: list[str] = []
     if data.observations:
         lines.append("Observations")
@@ -267,6 +275,161 @@ def _ram(data: MemoryInspection) -> list[str]:
     return lines + _footer(data)
 
 
+def _gpu(data: GpuInspection) -> list[str]:
+    lines = ["GPU"]
+    if not data.adapters:
+        lines += _section("Identity", [("Adapters", "none detected")])
+    for index, adapter in enumerate(data.adapters, start=1):
+        lines += _section(
+            f"Adapter {index} - Identity",
+            [
+                ("GPU", _text(adapter.identity.name)),
+                ("Vendor", _text(adapter.identity.vendor)),
+                ("Type", _text(adapter.identity.adapter_type)),
+            ],
+        )
+        lines += _section(
+            f"Adapter {index} - Configuration",
+            [
+                ("Dedicated VRAM", format_bytes(adapter.configuration.dedicated_vram_bytes)),
+                ("Driver version", _text(adapter.configuration.driver_version)),
+                ("Driver date", format_timestamp(adapter.configuration.driver_date)),
+            ],
+        )
+        lines += _section(
+            f"Adapter {index} - Current state",
+            [
+                ("Utilization", format_percent(adapter.current_state.utilization_percent)),
+                (
+                    "Temperature",
+                    UNAVAILABLE
+                    if adapter.current_state.temperature_celsius is None
+                    else f"{adapter.current_state.temperature_celsius:.1f} °C",
+                ),
+                ("Active display", _text(adapter.current_state.active_display)),
+                ("Primary", _text(adapter.current_state.primary)),
+            ],
+        )
+        lines += _section(
+            f"Adapter {index} - Health/status",
+            [("Device status", _text(adapter.health_status))],
+        )
+        if adapter.details:
+            item = adapter.details
+            lines += _section(
+                f"Adapter {index} - Details",
+                [
+                    ("PNP device ID", _text(item.pnp_device_id)),
+                    ("Device ID", _text(item.device_id)),
+                    ("Adapter status", _text(item.adapter_status)),
+                    ("Device error code", _text(item.device_error_code)),
+                    ("Driver provider", _text(item.driver_provider)),
+                    ("Driver INF", _text(item.driver_inf)),
+                    ("Driver signed", _text(item.driver_signed)),
+                    ("Video processor", _text(item.video_processor)),
+                    ("Current clock", format_frequency(item.current_clock_mhz)),
+                    ("VRAM used", format_bytes(item.vram_used_bytes)),
+                    (
+                        "Power",
+                        UNAVAILABLE if item.power_watts is None else f"{item.power_watts:.1f} W",
+                    ),
+                    ("Display resolution", _text(item.display_resolution)),
+                    ("Display refresh", _text(item.display_refresh_hz)),
+                ],
+            )
+    return lines + _footer(data)
+
+
+def _storage(data: StorageInspection) -> list[str]:
+    lines = ["Storage"]
+    if not data.physical_disks:
+        lines += _section("Physical disks", [("Disks", "none detected")])
+    for index, disk in enumerate(data.physical_disks, start=1):
+        lines += _section(
+            f"Physical disk {index} - Identity",
+            [
+                ("Disk number", _text(disk.identity.number)),
+                ("Model", _text(disk.identity.model)),
+            ],
+        )
+        lines += _section(
+            f"Physical disk {index} - Configuration",
+            [
+                ("Media type", _text(disk.configuration.media_type)),
+                ("Bus type", _text(disk.configuration.bus_type)),
+                ("Capacity", format_bytes(disk.configuration.capacity_bytes)),
+            ],
+        )
+        lines += _section(
+            f"Physical disk {index} - Health/status",
+            [
+                ("Health", _text(disk.health_status)),
+                ("Operational status", ", ".join(disk.operational_status) or UNAVAILABLE),
+            ],
+        )
+        if disk.details:
+            item = disk.details
+            lines += _section(
+                f"Physical disk {index} - Details",
+                [
+                    ("Serial number", _text(item.serial_number)),
+                    ("Firmware version", _text(item.firmware_version)),
+                    ("Partition style", _text(item.partition_style)),
+                    ("Device ID", _text(item.device_id)),
+                    ("TRIM enabled", _text(item.trim_enabled)),
+                    (
+                        "Temperature",
+                        UNAVAILABLE
+                        if item.temperature_celsius is None
+                        else f"{item.temperature_celsius:.1f} °C",
+                    ),
+                    ("Read errors", _text(item.read_errors)),
+                    ("Write errors", _text(item.write_errors)),
+                ],
+            )
+    if not data.volumes:
+        lines += _section("Mounted volumes", [("Volumes", "none detected")])
+    for index, volume in enumerate(data.volumes, start=1):
+        lines += _section(
+            f"Volume {index} - Identity",
+            [
+                ("Drive", _text(volume.identity.drive_letter)),
+                ("Name", _text(volume.identity.name)),
+            ],
+        )
+        lines += _section(
+            f"Volume {index} - Configuration",
+            [
+                ("Filesystem", _text(volume.configuration.filesystem)),
+                ("Capacity", format_bytes(volume.configuration.total_bytes)),
+            ],
+        )
+        lines += _section(
+            f"Volume {index} - Current state",
+            [
+                ("Used", format_bytes(volume.current_state.used_bytes)),
+                ("Free", format_bytes(volume.current_state.free_bytes)),
+                ("Free percentage", format_percent(volume.current_state.free_percent)),
+            ],
+        )
+        lines += _section(
+            f"Volume {index} - Health/status",
+            [
+                ("Health", _text(volume.health_status)),
+                ("Operational status", ", ".join(volume.operational_status) or UNAVAILABLE),
+            ],
+        )
+        if volume.details:
+            lines += _section(
+                f"Volume {index} - Details",
+                [
+                    ("Path", _text(volume.details.path)),
+                    ("Encryption", _text(volume.details.encryption_status)),
+                ],
+            )
+    return lines + _footer(data)
+
+
 def render_human(result: InspectionResult) -> str:
     if not result.success or result.data is None:
         return f"{result.capability.title()}\nError: {result.error or 'unknown'}"
@@ -274,6 +437,10 @@ def render_human(result: InspectionResult) -> str:
         lines = _system(result.data)
     elif isinstance(result.data, CpuInspection):
         lines = _cpu(result.data)
-    else:
+    elif isinstance(result.data, MemoryInspection):
         lines = _ram(result.data)
+    elif isinstance(result.data, GpuInspection):
+        lines = _gpu(result.data)
+    else:
+        lines = _storage(result.data)
     return "\n".join(lines)

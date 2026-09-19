@@ -172,4 +172,124 @@ class MemoryInspection(InspectionModel):
     warnings: list[SourceWarning] = Field(default_factory=list)
 
 
-InspectionData = SystemInspection | CpuInspection | MemoryInspection
+class GpuIdentity(InspectionModel):
+    name: str | None = None
+    vendor: str | None = None
+    adapter_type: Literal["hardware", "virtual"] | None = None
+
+
+class GpuConfiguration(InspectionModel):
+    dedicated_vram_bytes: int | None = None
+    driver_version: str | None = None
+    driver_date: datetime | None = None
+
+
+class GpuState(InspectionModel):
+    utilization_percent: float | None = None
+    temperature_celsius: float | None = None
+    active_display: bool | None = None
+    primary: bool | None = None
+
+
+class GpuDetails(InspectionModel):
+    pnp_device_id: str | None = None
+    device_id: str | None = None
+    adapter_status: str | None = None
+    device_error_code: int | None = None
+    driver_provider: str | None = None
+    driver_inf: str | None = None
+    driver_signed: bool | None = None
+    video_processor: str | None = None
+    current_clock_mhz: float | None = None
+    vram_used_bytes: int | None = None
+    power_watts: float | None = None
+    display_resolution: str | None = None
+    display_refresh_hz: int | None = None
+
+
+class GpuAdapter(InspectionModel):
+    identity: GpuIdentity
+    configuration: GpuConfiguration
+    current_state: GpuState
+    health_status: str | None = None
+    details: GpuDetails | None = None
+
+
+class GpuInspection(InspectionModel):
+    kind: Literal["gpu"] = "gpu"
+    adapters: list[GpuAdapter] = Field(default_factory=list)
+    observations: list[Observation] = Field(default_factory=list)
+    warnings: list[SourceWarning] = Field(default_factory=list)
+
+
+class DiskIdentity(InspectionModel):
+    number: int | None = None
+    model: str | None = None
+
+
+class DiskConfiguration(InspectionModel):
+    media_type: str | None = None
+    bus_type: str | None = None
+    capacity_bytes: int | None = None
+
+
+class DiskDetails(InspectionModel):
+    serial_number: str | None = None
+    firmware_version: str | None = None
+    partition_style: str | None = None
+    device_id: str | None = None
+    trim_enabled: bool | None = None
+    temperature_celsius: float | None = None
+    read_errors: int | None = None
+    write_errors: int | None = None
+
+
+class PhysicalDisk(InspectionModel):
+    identity: DiskIdentity
+    configuration: DiskConfiguration
+    health_status: str | None = None
+    operational_status: list[str] = Field(default_factory=list)
+    details: DiskDetails | None = None
+
+
+class VolumeIdentity(InspectionModel):
+    drive_letter: str | None = None
+    name: str | None = None
+
+
+class VolumeConfiguration(InspectionModel):
+    filesystem: str | None = None
+    total_bytes: int | None = None
+
+
+class VolumeState(InspectionModel):
+    used_bytes: int | None = None
+    free_bytes: int | None = None
+    free_percent: float | None = None
+
+
+class VolumeDetails(InspectionModel):
+    path: str | None = None
+    encryption_status: str | None = None
+
+
+class StorageVolume(InspectionModel):
+    identity: VolumeIdentity
+    configuration: VolumeConfiguration
+    current_state: VolumeState
+    health_status: str | None = None
+    operational_status: list[str] = Field(default_factory=list)
+    details: VolumeDetails | None = None
+
+
+class StorageInspection(InspectionModel):
+    kind: Literal["storage"] = "storage"
+    physical_disks: list[PhysicalDisk] = Field(default_factory=list)
+    volumes: list[StorageVolume] = Field(default_factory=list)
+    observations: list[Observation] = Field(default_factory=list)
+    warnings: list[SourceWarning] = Field(default_factory=list)
+
+
+InspectionData = (
+    SystemInspection | CpuInspection | MemoryInspection | GpuInspection | StorageInspection
+)

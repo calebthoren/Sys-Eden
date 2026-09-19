@@ -53,9 +53,9 @@ def inspect(
 ) -> None:
     """Inspect local Windows state without changing the machine."""
     component = "system" if component == "os" else component
-    supported = ("system", "cpu", "ram")
+    supported = ("system", "cpu", "ram", "gpu", "storage")
     if component != "all" and component not in supported:
-        raise typer.BadParameter("Supported components: all, system, cpu, ram")
+        raise typer.BadParameter("Supported components: all, system, cpu, ram, gpu, storage")
 
     async def run():
         provider = WindowsInspectionProvider(WindowsCimReader())
