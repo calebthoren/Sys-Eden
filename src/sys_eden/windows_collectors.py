@@ -1,13 +1,13 @@
 """Curated Windows collectors built on the allowlisted generic CIM reader."""
 
 import re
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from ipaddress import ip_address
 from typing import Literal
 
 from pydantic import JsonValue
 
-from sys_eden.inspection import CimQuery, CimReader, InspectionError
+from sys_eden.inspection import CimQuery, CimReader, InspectionError, SoftwareInventoryReader
 from sys_eden.inspection_models import (
     CpuConfiguration,
     CpuDetails,
@@ -17,6 +17,11 @@ from sys_eden.inspection_models import (
     DiskConfiguration,
     DiskDetails,
     DiskIdentity,
+    DriverConfiguration,
+    DriverDetails,
+    DriverEntry,
+    DriverIdentity,
+    DriversInspection,
     GpuAdapter,
     GpuConfiguration,
     GpuDetails,
@@ -50,7 +55,17 @@ from sys_eden.inspection_models import (
     ServiceIdentity,
     ServicesInspection,
     ServiceState,
+    SoftwareConfiguration,
+    SoftwareDetails,
+    SoftwareEntry,
+    SoftwareIdentity,
+    SoftwareInspection,
     SourceWarning,
+    StartupConfiguration,
+    StartupDetails,
+    StartupIdentity,
+    StartupInspection,
+    StartupItem,
     StorageInspection,
     StorageVolume,
     SystemDetails,
@@ -197,8 +212,13 @@ def _unique_integers(rows: list[dict[str, JsonValue]], field: str) -> list[int]:
 class WindowsInspectionProvider:
     """Translate Windows-specific data into stable domain models."""
 
-    def __init__(self, reader: CimReader):
+    def __init__(
+        self,
+        reader: CimReader,
+        software_reader: SoftwareInventoryReader | None = None,
+    ):
         self._reader = reader
+        self._software_reader = software_reader
 
     async def _query(
         self,
@@ -359,7 +379,7 @@ class WindowsInspectionProvider:
             motherboard_model=_clean(board.get("Product")),
             firmware_vendor=_clean(bios.get("Manufacturer")),
             firmware_version=_clean(bios.get("SMBIOSBIOSVersion")),
-            firmware_release_date=_datetime(bios.get("ReleaseDate")),
+            firmware_release_date=self._calendar_date(bios.get("ReleaseDate")),
             tpm_present=bool(tpm_rows) if tpm_ok else None,
             tpm_version=_clean(tpm.get("SpecVersion")),
             windows_install_date=_datetime(operating_system.get("InstallDate")),
@@ -670,7 +690,7 @@ class WindowsInspectionProvider:
                 # AdapterRAM is a 32-bit WMI field and is unreliable for modern GPUs.
                 dedicated_vram_bytes=None,
                 driver_version=_clean(row.get("DriverVersion")),
-                driver_date=_datetime(row.get("DriverDate")),
+                driver_date=self._calendar_date(row.get("DriverDate")),
             ),
             current_state=GpuState(
                 # Standard CIM does not reliably map utilization/temperature per adapter.
@@ -995,6 +1015,224 @@ class WindowsInspectionProvider:
         )
         return ServicesInspection(services=services, warnings=warnings)
 
+    async def startup(self, *, details: bool) -> StartupInspection:
+        warnings: list[SourceWarning] = []
+        properties = ["Name", "Caption", "Location", "User"]
+        if details:
+            properties += ["Command", "Description", "UserSID"]
+        rows, ok = await self._query("Win32_StartupCommand", properties, warnings, limit=1000)
+        if not ok:
+            raise InspectionError("InspectionUnavailable")
+        items = [self._startup_item(row, details) for row in rows]
+        items.sort(key=lambda item: (item.identity.name or "").casefold())
+        return StartupInspection(items=items, warnings=warnings)
+
+    @staticmethod
+    def _startup_item(row: dict[str, JsonValue], details: bool) -> StartupItem:
+        location = _clean(row.get("Location"))
+        user = _clean(row.get("User"))
+        user_sid = _clean(row.get("UserSID"))
+        source_type = None
+        if location:
+            lowered = location.casefold()
+            if "startup" in lowered:
+                source_type = "startup folder"
+            elif "registry" in lowered or lowered.startswith(("hk", "machine", "user")):
+                source_type = "registry"
+        system_sids = ("S-1-5-18", "S-1-5-19", "S-1-5-20")
+        scope = (
+            "system"
+            if (user_sid or "").upper().startswith(system_sids)
+            or (user or "").casefold() in {"all users", "public"}
+            else "user"
+            if user or user_sid
+            else None
+        )
+        name = _clean(row.get("Name"))
+        return StartupItem(
+            identity=StartupIdentity(
+                name=name,
+                application=_clean(row.get("Caption")) or name,
+            ),
+            configuration=StartupConfiguration(
+                # This provider enumerates registered entries but not disabled-state stores.
+                enabled=None,
+                source_type=source_type,
+                scope=scope,
+            ),
+            current_state="registered",
+            details=(
+                StartupDetails(
+                    command=_clean(row.get("Command")),
+                    source_location=location,
+                    user=user,
+                    user_sid=user_sid,
+                )
+                if details
+                else None
+            ),
+        )
+
+    async def drivers(self, *, details: bool) -> DriversInspection:
+        warnings: list[SourceWarning] = []
+        signed_properties = [
+            "DeviceID",
+            "DeviceName",
+            "DeviceClass",
+            "DriverProviderName",
+            "DriverVersion",
+            "DriverDate",
+            "IsSigned",
+            "Started",
+        ]
+        if details:
+            signed_properties += ["InfName", "Signer", "Manufacturer"]
+        signed_rows, signed_ok = await self._query(
+            "Win32_PnPSignedDriver", signed_properties, warnings, limit=1000
+        )
+        entity_properties = ["DeviceID", "Name", "PNPClass", "Status", "ConfigManagerErrorCode"]
+        if details:
+            entity_properties += [
+                "HardwareID",
+                "CompatibleID",
+                "Service",
+                "LocationInformation",
+            ]
+        entity_rows, entity_ok = await self._query(
+            "Win32_PnPEntity", entity_properties, warnings, limit=1000
+        )
+        if not signed_ok and not entity_ok:
+            raise InspectionError("InspectionUnavailable")
+        entities = {
+            key.casefold(): row
+            for row in entity_rows
+            if (key := _clean(row.get("DeviceID"))) is not None
+        }
+        entries = [
+            self._driver_entry(
+                row,
+                entities.get((_clean(row.get("DeviceID")) or "").casefold(), {}),
+                details,
+            )
+            for row in signed_rows
+            if _clean(row.get("DeviceName")) or _clean(row.get("DeviceID"))
+        ]
+        entries = [item for item in entries if item.identity.device_name is not None]
+        entries.sort(
+            key=lambda item: (
+                (item.identity.device_class or "").casefold(),
+                (item.identity.device_name or "").casefold(),
+            )
+        )
+        observations = [
+            Observation(
+                code="device_problem_code",
+                message=(
+                    f"{item.identity.device_name or 'A device'} reports problem code "
+                    f"{item.details.problem_code}."
+                ),
+                severity="warning",
+            )
+            for item in entries
+            if item.details is not None
+            and item.details.problem_code not in (None, 0)
+        ]
+        return DriversInspection(
+            drivers=entries,
+            observations=observations,
+            warnings=warnings,
+        )
+
+    @staticmethod
+    def _driver_entry(
+        row: dict[str, JsonValue],
+        entity: dict[str, JsonValue],
+        details: bool,
+    ) -> DriverEntry:
+        problem_code = _integer(entity.get("ConfigManagerErrorCode"))
+        status = _clean(entity.get("Status"))
+        if status is None and problem_code == 0:
+            status = "OK"
+        started = _boolean(row.get("Started"))
+        return DriverEntry(
+            identity=DriverIdentity(
+                device_name=_clean(row.get("DeviceName")) or _clean(entity.get("Name")),
+                device_class=_clean(row.get("DeviceClass")) or _clean(entity.get("PNPClass")),
+            ),
+            configuration=DriverConfiguration(
+                provider=_clean(row.get("DriverProviderName")),
+                version=_clean(row.get("DriverVersion")),
+                date=WindowsInspectionProvider._calendar_date(row.get("DriverDate")),
+                signed=_boolean(row.get("IsSigned")),
+            ),
+            current_state=(
+                "started" if started is True else "not started" if started is False else None
+            ),
+            health_status=status,
+            details=(
+                DriverDetails(
+                    inf_name=_clean(row.get("InfName")),
+                    hardware_ids=WindowsInspectionProvider._strings(entity.get("HardwareID")),
+                    compatible_ids=WindowsInspectionProvider._strings(
+                        entity.get("CompatibleID")
+                    ),
+                    device_instance_id=_clean(row.get("DeviceID")),
+                    service_name=_clean(entity.get("Service")),
+                    signer=_clean(row.get("Signer")),
+                    manufacturer=_clean(row.get("Manufacturer")),
+                    problem_code=problem_code,
+                    location=_clean(entity.get("LocationInformation")),
+                )
+                if details
+                else None
+            ),
+        )
+
+    async def software(self, *, details: bool) -> SoftwareInspection:
+        if self._software_reader is None:
+            raise InspectionError("CapabilityUnavailable")
+        rows = await self._software_reader.installed_software()
+        applications = [self._software_entry(row, details) for row in rows]
+        applications.sort(key=lambda item: item.identity.name.casefold())
+        return SoftwareInspection(applications=applications)
+
+    @staticmethod
+    def _software_entry(row: dict[str, JsonValue], details: bool) -> SoftwareEntry:
+        name = _clean(row.get("DisplayName"))
+        if name is None:
+            raise InspectionError("InvalidToolOutput")
+        scope = _clean(row.get("Scope"))
+        architecture = _clean(row.get("Architecture"))
+        install_date = WindowsInspectionProvider._compact_date(row.get("InstallDate"))
+        return SoftwareEntry(
+            identity=SoftwareIdentity(
+                name=name,
+                publisher=_clean(row.get("Publisher")),
+            ),
+            configuration=SoftwareConfiguration(
+                version=_clean(row.get("DisplayVersion")),
+                installation_scope=(
+                    "user" if scope == "user" else "machine" if scope == "machine" else None
+                ),
+                install_date=install_date,
+            ),
+            details=(
+                SoftwareDetails(
+                    install_location=_clean(row.get("InstallLocation")),
+                    registry_source=_clean(row.get("RegistrySource")),
+                    uninstall_identifier=_clean(row.get("UninstallIdentifier")),
+                    product_identifier=_clean(row.get("ProductIdentifier")),
+                    architecture=(
+                        "x86" if architecture == "x86" else "x64" if architecture == "x64" else None
+                    ),
+                    install_source=_clean(row.get("InstallSource")),
+                    install_channel=_clean(row.get("InstallChannel")),
+                )
+                if details
+                else None
+            ),
+        )
+
     @staticmethod
     def _service_entry(row: dict[str, JsonValue], details: bool) -> ServiceEntry:
         name = _clean(row.get("Name"))
@@ -1270,6 +1508,21 @@ class WindowsInspectionProvider:
     def _positive_integer(value: JsonValue | None) -> int | None:
         number = _integer(value)
         return number if number is not None and number > 0 else None
+
+    @staticmethod
+    def _compact_date(value: JsonValue | None) -> date | None:
+        text = _clean(value)
+        if text is None or len(text) != 8 or not text.isdigit():
+            return None
+        try:
+            return date(int(text[:4]), int(text[4:6]), int(text[6:8]))
+        except ValueError:
+            return None
+
+    @staticmethod
+    def _calendar_date(value: JsonValue | None) -> date | None:
+        timestamp = _datetime(value)
+        return timestamp.date() if timestamp is not None else None
 
     @staticmethod
     def _memory_module(row: dict[str, JsonValue]) -> MemoryModule:

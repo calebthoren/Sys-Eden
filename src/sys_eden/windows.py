@@ -25,9 +25,54 @@ try {
 }
 """
 
+_SOFTWARE_SCRIPT = """
+$ErrorActionPreference = 'Stop'
+[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
+$roots = @(
+    @{Path='HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*'; Scope='machine'; Architecture='x64'},
+    @{Path='HKLM:\\Software\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*'; Scope='machine'; Architecture='x86'},
+    @{Path='HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*'; Scope='user'; Architecture=$null}
+)
+$rows = foreach ($root in $roots) {
+    Get-ItemProperty -Path $root.Path -ErrorAction SilentlyContinue |
+        Where-Object { $_.DisplayName } |
+        ForEach-Object {
+            [PSCustomObject]@{
+                DisplayName = $_.DisplayName
+                DisplayVersion = $_.DisplayVersion
+                Publisher = $_.Publisher
+                InstallDate = $_.InstallDate
+                InstallLocation = $_.InstallLocation
+                InstallSource = $_.InstallSource
+                RegistrySource = $_.PSPath
+                UninstallIdentifier = $_.PSChildName
+                ProductIdentifier = if ($_.WindowsInstaller -eq 1) { $_.PSChildName } else { $null }
+                Scope = $root.Scope
+                Architecture = $root.Architecture
+                InstallChannel = if ($_.WindowsInstaller -eq 1) { 'MSI' } else { 'registry' }
+            }
+        }
+}
+ConvertTo-Json -InputObject @($rows) -Depth 4 -Compress
+"""
+
 
 class WindowsCimReader:
     async def query(self, request: CimQuery) -> list[dict[str, JsonValue]]:
+        stdout = await self._execute(_SCRIPT, request.model_dump_json().encode("utf-8"))
+        try:
+            return _ROWS.validate_json(stdout)
+        except ValidationError as error:
+            raise InspectionError("InvalidToolOutput") from error
+
+    async def installed_software(self) -> list[dict[str, JsonValue]]:
+        stdout = await self._execute(_SOFTWARE_SCRIPT, b"")
+        try:
+            return _ROWS.validate_json(stdout)
+        except ValidationError as error:
+            raise InspectionError("InvalidToolOutput") from error
+
+    async def _execute(self, script: str, input_data: bytes) -> bytes:
         if sys.platform != "win32":
             raise InspectionError("CapabilityUnavailable")
         executable = (
@@ -36,7 +81,12 @@ class WindowsCimReader:
         )
         try:
             process = await asyncio.create_subprocess_exec(
-                str(executable), "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", _SCRIPT,
+                str(executable),
+                "-NoLogo",
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                script,
                 stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.DEVNULL,
@@ -46,7 +96,7 @@ class WindowsCimReader:
             raise InspectionError("CapabilityUnavailable") from error
         try:
             async with asyncio.timeout(20):
-                stdout, _ = await process.communicate(request.model_dump_json().encode("utf-8"))
+                stdout, _ = await process.communicate(input_data)
         except (TimeoutError, asyncio.CancelledError) as error:
             if process.returncode is None:
                 process.kill()
@@ -56,7 +106,4 @@ class WindowsCimReader:
             raise InspectionError("ToolTimeout") from error
         if process.returncode != 0:
             raise InspectionError("ExecutionFailed")
-        try:
-            return _ROWS.validate_json(stdout)
-        except ValidationError as error:
-            raise InspectionError("InvalidToolOutput") from error
+        return stdout

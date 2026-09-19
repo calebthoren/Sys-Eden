@@ -30,7 +30,8 @@ standard Windows providers cannot supply reliable telemetry or health counters.
 curated DHCP/driver/route details without external address lookup.
 `processes` provides resource-ranked current state with permission-tolerant
 details, and `services` provides compact state/startup inventory plus curated
-details. Remaining work includes
+details. `startup`, `drivers`, and registry-based `software` inventory are now
+implemented without Windows Installer side effects. Remaining work includes
 services, startup, drivers, software, event logs, crashes, and broader generic
 read interfaces. Milestone 2 acceptance has not yet been reached.
 The repository retains the initial `src/sys_eden/` package spelling.

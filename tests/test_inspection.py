@@ -1,6 +1,6 @@
 import asyncio
 import json
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from unittest.mock import AsyncMock
 
 import pytest
@@ -232,6 +232,30 @@ class FixtureReader:
                     "ServiceSpecificExitCode": 0,
                 }
             ],
+            "Win32_StartupCommand": [
+                {
+                    "Name": "Fixture Startup",
+                    "Caption": "Fixture Startup App",
+                    "Location": "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run",
+                    "User": "fixture-user",
+                    "Command": '"C:\\Apps\\startup.exe" --quiet',
+                    "Description": "Fixture startup entry",
+                    "UserSID": "S-1-5-21-fixture",
+                }
+            ],
+            "Win32_PnPEntity": [
+                {
+                    "DeviceID": "PCI\\VEN_FIXTURE",
+                    "Name": "Fixture GPU",
+                    "PNPClass": "Display",
+                    "Status": "OK",
+                    "ConfigManagerErrorCode": 0,
+                    "HardwareID": ["PCI\\VEN_FIXTURE&DEV_0001"],
+                    "CompatibleID": ["PCI\\CC_0300"],
+                    "Service": "fixture-display",
+                    "LocationInformation": "PCI bus 1",
+                }
+            ],
             "Win32_LogicalDisk": [
                 {
                     "DeviceID": "C:",
@@ -327,6 +351,24 @@ class FixtureReader:
         self.requests.append(request)
         rows = self.rows.get(request.class_name, [])
         return [{key: row.get(key) for key in request.properties} for row in rows]
+
+    async def installed_software(self) -> list[dict[str, JsonValue]]:
+        return [
+            {
+                "DisplayName": "Fixture App",
+                "DisplayVersion": "1.2.3",
+                "Publisher": "Fixture Publisher",
+                "InstallDate": "20260102",
+                "InstallLocation": "C:\\Apps\\Fixture",
+                "InstallSource": "C:\\Installers",
+                "RegistrySource": "HKLM:\\...\\Fixture",
+                "UninstallIdentifier": "Fixture",
+                "ProductIdentifier": "{fixture-product}",
+                "Scope": "machine",
+                "Architecture": "x64",
+                "InstallChannel": "MSI",
+            }
+        ]
 
 
 def test_generic_query_rejects_mutating_provider_and_script_properties():
@@ -519,6 +561,56 @@ async def test_services_default_and_details_are_curated():
 
 
 @pytest.mark.asyncio
+async def test_startup_preserves_unknown_enabled_state_and_adds_source_details():
+    provider = WindowsInspectionProvider(FixtureReader())
+    basic = await provider.startup(details=False)
+    assert basic.items[0].identity.name == "Fixture Startup"
+    assert basic.items[0].configuration.enabled is None
+    assert basic.items[0].configuration.source_type == "registry"
+    assert basic.items[0].configuration.scope == "user"
+    assert basic.items[0].details is None
+
+    detailed = await provider.startup(details=True)
+    assert detailed.items[0].details is not None
+    assert detailed.items[0].details.user_sid == "S-1-5-21-fixture"
+    assert detailed.items[0].details.arguments is None
+
+
+@pytest.mark.asyncio
+async def test_driver_inventory_correlates_device_status_and_details():
+    provider = WindowsInspectionProvider(FixtureReader())
+    basic = await provider.drivers(details=False)
+    display = next(item for item in basic.drivers if item.identity.device_name == "Fixture GPU")
+    assert display.identity.device_class == "Display"
+    assert display.configuration.version == "1.2.3"
+    assert display.health_status == "OK"
+    assert display.details is None
+
+    detailed = await provider.drivers(details=True)
+    display = next(item for item in detailed.drivers if item.identity.device_name == "Fixture GPU")
+    assert display.details is not None
+    assert display.details.inf_name == "fixture.inf"
+    assert display.details.hardware_ids == ["PCI\\VEN_FIXTURE&DEV_0001"]
+    assert display.details.problem_code == 0
+
+
+@pytest.mark.asyncio
+async def test_software_uses_registry_inventory_without_installer_provider():
+    reader = FixtureReader()
+    provider = WindowsInspectionProvider(reader, software_reader=reader)
+    basic = await provider.software(details=False)
+    assert basic.applications[0].identity.name == "Fixture App"
+    assert basic.applications[0].configuration.installation_scope == "machine"
+    assert basic.applications[0].configuration.install_date == date(2026, 1, 2)
+    assert basic.applications[0].details is None
+
+    detailed = await provider.software(details=True)
+    assert detailed.applications[0].details is not None
+    assert detailed.applications[0].details.architecture == "x64"
+    assert detailed.applications[0].details.install_channel == "MSI"
+
+
+@pytest.mark.asyncio
 async def test_partial_source_failure_is_reported_without_losing_other_evidence():
     class PartialReader(FixtureReader):
         async def query(self, request: CimQuery) -> list[dict[str, JsonValue]]:
@@ -557,6 +649,15 @@ async def test_collect_wraps_provider_failure():
             raise InspectionError("PermissionDenied")
 
         async def services(self, *, details: bool):
+            raise InspectionError("PermissionDenied")
+
+        async def startup(self, *, details: bool):
+            raise InspectionError("PermissionDenied")
+
+        async def drivers(self, *, details: bool):
+            raise InspectionError("PermissionDenied")
+
+        async def software(self, *, details: bool):
             raise InspectionError("PermissionDenied")
 
     result = await collect("cpu", Provider(), details=False)
@@ -681,3 +782,16 @@ async def test_windows_adapter_reaps_process_on_interruption(
         await WindowsCimReader().query(query)
     assert process.killed
     assert process.reaped
+
+
+@pytest.mark.asyncio
+async def test_windows_software_reader_validates_structured_output(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    reader = WindowsCimReader()
+    execute = AsyncMock(return_value=b'[{"DisplayName":"Fixture App"}]')
+    monkeypatch.setattr(reader, "_execute", execute)
+    assert await reader.installed_software() == [{"DisplayName": "Fixture App"}]
+    await_call = execute.await_args
+    assert await_call is not None
+    assert await_call.args[1] == b""

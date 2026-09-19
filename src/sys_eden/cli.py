@@ -62,15 +62,19 @@ def inspect(
         "network",
         "processes",
         "services",
+        "startup",
+        "drivers",
+        "software",
     )
     if component != "all" and component not in supported:
         raise typer.BadParameter(
             "Supported components: all, system, cpu, ram, gpu, storage, network, "
-            "processes, services"
+            "processes, services, startup, drivers, software"
         )
 
     async def run():
-        provider = WindowsInspectionProvider(WindowsCimReader())
+        reader = WindowsCimReader()
+        provider = WindowsInspectionProvider(reader, software_reader=reader)
         names = supported if component == "all" else (component,)
         return [await collect(name, provider, details=details) for name in names]
 

@@ -8,12 +8,15 @@ from pydantic import BaseModel, Field, JsonValue
 
 from sys_eden.inspection_models import (
     CpuInspection,
+    DriversInspection,
     GpuInspection,
     InspectionData,
     MemoryInspection,
     NetworkInspection,
     ProcessesInspection,
     ServicesInspection,
+    SoftwareInspection,
+    StartupInspection,
     StorageInspection,
     SystemInspection,
 )
@@ -37,6 +40,8 @@ CimClass = Literal[
     "Win32_Tpm",
     "Win32_VideoController",
     "Win32_Service",
+    "Win32_StartupCommand",
+    "Win32_PnPEntity",
     "MSFT_Disk",
     "MSFT_PhysicalDisk",
     "MSFT_Volume",
@@ -66,6 +71,10 @@ class CimReader(Protocol):
     async def query(self, request: CimQuery) -> list[dict[str, JsonValue]]: ...
 
 
+class SoftwareInventoryReader(Protocol):
+    async def installed_software(self) -> list[dict[str, JsonValue]]: ...
+
+
 class InspectionProvider(Protocol):
     async def system(self, *, details: bool) -> SystemInspection: ...
 
@@ -82,6 +91,12 @@ class InspectionProvider(Protocol):
     async def processes(self, *, details: bool) -> ProcessesInspection: ...
 
     async def services(self, *, details: bool) -> ServicesInspection: ...
+
+    async def startup(self, *, details: bool) -> StartupInspection: ...
+
+    async def drivers(self, *, details: bool) -> DriversInspection: ...
+
+    async def software(self, *, details: bool) -> SoftwareInspection: ...
 
 
 class InspectionResult(BaseModel):
@@ -113,6 +128,12 @@ async def collect(name: str, provider: InspectionProvider, *, details: bool) -> 
             data = await provider.processes(details=details)
         elif name == "services":
             data = await provider.services(details=details)
+        elif name == "startup":
+            data = await provider.startup(details=details)
+        elif name == "drivers":
+            data = await provider.drivers(details=details)
+        elif name == "software":
+            data = await provider.software(details=details)
         else:
             raise InspectionError("CapabilityUnavailable")
     except InspectionError as error:

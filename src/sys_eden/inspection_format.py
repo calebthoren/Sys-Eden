@@ -1,15 +1,18 @@
 """Human CLI presentation for structured inspection data."""
 
-from datetime import datetime
+from datetime import date, datetime
 
 from sys_eden.inspection import InspectionResult
 from sys_eden.inspection_models import (
     CpuInspection,
+    DriversInspection,
     GpuInspection,
     MemoryInspection,
     NetworkInspection,
     ProcessesInspection,
     ServicesInspection,
+    SoftwareInspection,
+    StartupInspection,
     StorageInspection,
     SystemInspection,
 )
@@ -65,6 +68,10 @@ def format_timestamp(value: datetime | None) -> str:
     return UNAVAILABLE if value is None else value.astimezone().isoformat(timespec="seconds")
 
 
+def format_date(value: date | None) -> str:
+    return UNAVAILABLE if value is None else value.isoformat()
+
+
 def format_duration(value: float | None) -> str:
     if value is None:
         return UNAVAILABLE
@@ -103,6 +110,9 @@ def _footer(
         | NetworkInspection
         | ProcessesInspection
         | ServicesInspection
+        | StartupInspection
+        | DriversInspection
+        | SoftwareInspection
     ),
 ) -> list[str]:
     lines: list[str] = []
@@ -159,7 +169,7 @@ def _system(data: SystemInspection) -> list[str]:
                 ("Motherboard model", _text(item.motherboard_model)),
                 ("Firmware vendor", _text(item.firmware_vendor)),
                 ("Firmware version", _text(item.firmware_version)),
-                ("Firmware release date", format_timestamp(item.firmware_release_date)),
+                ("Firmware release date", format_date(item.firmware_release_date)),
                 ("Firmware mode", _text(item.firmware_mode)),
                 ("Secure Boot", _text(item.secure_boot_enabled)),
                 ("TPM present", _text(item.tpm_present)),
@@ -321,7 +331,7 @@ def _gpu(data: GpuInspection) -> list[str]:
             [
                 ("Dedicated VRAM", format_bytes(adapter.configuration.dedicated_vram_bytes)),
                 ("Driver version", _text(adapter.configuration.driver_version)),
-                ("Driver date", format_timestamp(adapter.configuration.driver_date)),
+                ("Driver date", format_date(adapter.configuration.driver_date)),
             ],
         )
         lines += _section(
@@ -608,6 +618,113 @@ def _services(data: ServicesInspection) -> list[str]:
     return lines + _footer(data)
 
 
+def _startup(data: StartupInspection) -> list[str]:
+    lines = ["Startup items", "Configuration"]
+    for item in data.items:
+        lines.append(
+            "  "
+            f"{_text(item.identity.name)} | app {_text(item.identity.application)} | "
+            f"enabled {_text(item.configuration.enabled)} | "
+            f"source {_text(item.configuration.source_type)} | "
+            f"scope {_text(item.configuration.scope)} | "
+            f"publisher {_text(item.identity.publisher)}"
+        )
+        if item.details:
+            detail = item.details
+            lines += _section(
+                f"{_text(item.identity.name)} - Details",
+                [
+                    ("Command/path", _text(detail.command)),
+                    ("Source location", _text(detail.source_location)),
+                    ("Arguments", _text(detail.arguments)),
+                    ("Digitally signed", _text(detail.digitally_signed)),
+                    ("Associated package", _text(detail.associated_package)),
+                    ("User", _text(detail.user)),
+                    ("User SID", _text(detail.user_sid)),
+                    ("Startup impact", _text(detail.startup_impact)),
+                ],
+            )
+    return lines + _footer(data)
+
+
+def _drivers(data: DriversInspection) -> list[str]:
+    display_limit = 50
+    shown = data.drivers[:display_limit]
+    lines = ["Drivers", "Summary", f"  Detected: {len(data.drivers)}", f"  Shown: {len(shown)}"]
+    lines.append("Inventory")
+    for driver in shown:
+        lines.append(
+            "  "
+            f"{_text(driver.identity.device_name)} | "
+            f"class {_text(driver.identity.device_class)} | "
+            f"provider {_text(driver.configuration.provider)} | "
+            f"version {_text(driver.configuration.version)} | "
+            f"date {format_date(driver.configuration.date)} | "
+            f"status {_text(driver.health_status)} | "
+            f"signed {_text(driver.configuration.signed)}"
+        )
+        if driver.details:
+            item = driver.details
+            lines += _section(
+                f"{_text(driver.identity.device_name)} - Details",
+                [
+                    ("INF/package", _text(item.inf_name)),
+                    ("Hardware IDs", ", ".join(item.hardware_ids) or UNAVAILABLE),
+                    ("Compatible IDs", ", ".join(item.compatible_ids) or UNAVAILABLE),
+                    ("Device instance ID", _text(item.device_instance_id)),
+                    ("Service", _text(item.service_name)),
+                    ("Driver files", ", ".join(item.driver_files) or UNAVAILABLE),
+                    ("Signer", _text(item.signer)),
+                    ("Manufacturer", _text(item.manufacturer)),
+                    ("Problem code", _text(item.problem_code)),
+                    ("Location", _text(item.location)),
+                ],
+            )
+    if len(data.drivers) > len(shown):
+        lines.append("Display note")
+        lines.append("  Human output is limited to 50 drivers; --json includes all records.")
+    return lines + _footer(data)
+
+
+def _software(data: SoftwareInspection) -> list[str]:
+    display_limit = 100
+    shown = data.applications[:display_limit]
+    lines = [
+        "Installed software",
+        "Summary",
+        f"  Detected: {len(data.applications)}",
+        f"  Shown: {len(shown)}",
+        "Inventory",
+    ]
+    for application in shown:
+        lines.append(
+            "  "
+            f"{application.identity.name} | "
+            f"version {_text(application.configuration.version)} | "
+            f"publisher {_text(application.identity.publisher)} | "
+            f"scope {_text(application.configuration.installation_scope)} | "
+            f"installed {format_date(application.configuration.install_date)}"
+        )
+        if application.details:
+            item = application.details
+            lines += _section(
+                f"{application.identity.name} - Details",
+                [
+                    ("Install location", _text(item.install_location)),
+                    ("Registry source", _text(item.registry_source)),
+                    ("Uninstall identifier", _text(item.uninstall_identifier)),
+                    ("Product identifier", _text(item.product_identifier)),
+                    ("Architecture", _text(item.architecture)),
+                    ("Install source", _text(item.install_source)),
+                    ("Install channel", _text(item.install_channel)),
+                ],
+            )
+    if len(data.applications) > len(shown):
+        lines.append("Display note")
+        lines.append("  Human output is limited to 100 applications; --json includes all records.")
+    return lines + _footer(data)
+
+
 def render_human(result: InspectionResult) -> str:
     if not result.success or result.data is None:
         return f"{result.capability.title()}\nError: {result.error or 'unknown'}"
@@ -625,6 +742,12 @@ def render_human(result: InspectionResult) -> str:
         lines = _network(result.data)
     elif isinstance(result.data, ProcessesInspection):
         lines = _processes(result.data)
-    else:
+    elif isinstance(result.data, ServicesInspection):
         lines = _services(result.data)
+    elif isinstance(result.data, StartupInspection):
+        lines = _startup(result.data)
+    elif isinstance(result.data, DriversInspection):
+        lines = _drivers(result.data)
+    else:
+        lines = _software(result.data)
     return "\n".join(lines)

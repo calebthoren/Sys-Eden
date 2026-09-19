@@ -1,5 +1,6 @@
 """Typed, platform-neutral inspection results used by the CLI and future Core logic."""
 
+from datetime import date as Date
 from datetime import datetime
 from typing import Literal
 
@@ -57,7 +58,7 @@ class SystemDetails(InspectionModel):
     motherboard_model: str | None = None
     firmware_vendor: str | None = None
     firmware_version: str | None = None
-    firmware_release_date: datetime | None = None
+    firmware_release_date: Date | None = None
     firmware_mode: Literal["UEFI", "legacy"] | None = None
     secure_boot_enabled: bool | None = None
     tpm_present: bool | None = None
@@ -181,7 +182,7 @@ class GpuIdentity(InspectionModel):
 class GpuConfiguration(InspectionModel):
     dedicated_vram_bytes: int | None = None
     driver_version: str | None = None
-    driver_date: datetime | None = None
+    driver_date: Date | None = None
 
 
 class GpuState(InspectionModel):
@@ -448,6 +449,120 @@ class ServicesInspection(InspectionModel):
     warnings: list[SourceWarning] = Field(default_factory=list)
 
 
+class StartupIdentity(InspectionModel):
+    name: str | None = None
+    application: str | None = None
+    publisher: str | None = None
+
+
+class StartupConfiguration(InspectionModel):
+    enabled: bool | None = None
+    source_type: str | None = None
+    scope: str | None = None
+
+
+class StartupDetails(InspectionModel):
+    command: str | None = None
+    source_location: str | None = None
+    arguments: str | None = None
+    digitally_signed: bool | None = None
+    associated_package: str | None = None
+    user: str | None = None
+    user_sid: str | None = None
+    startup_impact: str | None = None
+
+
+class StartupItem(InspectionModel):
+    identity: StartupIdentity
+    configuration: StartupConfiguration
+    current_state: str | None = None
+    health_status: str | None = None
+    details: StartupDetails | None = None
+
+
+class StartupInspection(InspectionModel):
+    kind: Literal["startup"] = "startup"
+    items: list[StartupItem] = Field(default_factory=list)
+    observations: list[Observation] = Field(default_factory=list)
+    warnings: list[SourceWarning] = Field(default_factory=list)
+
+
+class DriverIdentity(InspectionModel):
+    device_name: str | None = None
+    device_class: str | None = None
+
+
+class DriverConfiguration(InspectionModel):
+    provider: str | None = None
+    version: str | None = None
+    date: Date | None = None
+    signed: bool | None = None
+
+
+class DriverDetails(InspectionModel):
+    inf_name: str | None = None
+    hardware_ids: list[str] = Field(default_factory=list)
+    compatible_ids: list[str] = Field(default_factory=list)
+    device_instance_id: str | None = None
+    service_name: str | None = None
+    driver_files: list[str] = Field(default_factory=list)
+    signer: str | None = None
+    manufacturer: str | None = None
+    problem_code: int | None = None
+    location: str | None = None
+
+
+class DriverEntry(InspectionModel):
+    identity: DriverIdentity
+    configuration: DriverConfiguration
+    current_state: str | None = None
+    health_status: str | None = None
+    details: DriverDetails | None = None
+
+
+class DriversInspection(InspectionModel):
+    kind: Literal["drivers"] = "drivers"
+    drivers: list[DriverEntry] = Field(default_factory=list)
+    observations: list[Observation] = Field(default_factory=list)
+    warnings: list[SourceWarning] = Field(default_factory=list)
+
+
+class SoftwareIdentity(InspectionModel):
+    name: str
+    publisher: str | None = None
+
+
+class SoftwareConfiguration(InspectionModel):
+    version: str | None = None
+    installation_scope: Literal["user", "machine"] | None = None
+    install_date: Date | None = None
+
+
+class SoftwareDetails(InspectionModel):
+    install_location: str | None = None
+    registry_source: str | None = None
+    uninstall_identifier: str | None = None
+    product_identifier: str | None = None
+    architecture: Literal["x86", "x64"] | None = None
+    install_source: str | None = None
+    install_channel: str | None = None
+
+
+class SoftwareEntry(InspectionModel):
+    identity: SoftwareIdentity
+    configuration: SoftwareConfiguration
+    current_state: str | None = None
+    health_status: str | None = None
+    details: SoftwareDetails | None = None
+
+
+class SoftwareInspection(InspectionModel):
+    kind: Literal["software"] = "software"
+    applications: list[SoftwareEntry] = Field(default_factory=list)
+    observations: list[Observation] = Field(default_factory=list)
+    warnings: list[SourceWarning] = Field(default_factory=list)
+
+
 InspectionData = (
     SystemInspection
     | CpuInspection
@@ -457,4 +572,7 @@ InspectionData = (
     | NetworkInspection
     | ProcessesInspection
     | ServicesInspection
+    | StartupInspection
+    | DriversInspection
+    | SoftwareInspection
 )

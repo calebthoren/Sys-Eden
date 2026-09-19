@@ -42,6 +42,9 @@ uv run eden inspect storage
 uv run eden inspect network
 uv run eden inspect processes
 uv run eden inspect services
+uv run eden inspect startup
+uv run eden inspect drivers
+uv run eden inspect software
 uv run eden inspect ram --details
 uv run eden inspect system --json
 ```
@@ -75,4 +78,11 @@ Protected fields and process owners may be unavailable. Service inspection keeps
 normal rows compact while `--details` adds paths, accounts, descriptions, PIDs,
 startup behavior, service types, and exit codes. Dependency relationships are
 reserved in the schema but unavailable from the current generic reader.
+Startup inspection reports registered startup commands but leaves enablement,
+publisher/signature, and impact unavailable where Win32 does not expose them.
+Driver inventory correlates signed-driver records with Plug and Play device
+status; the human view shows 50 records while `--json` contains the full result.
+Installed software is read from machine/user uninstall registry keys without
+using `Win32_Product`; the human view shows 100 records while `--json` contains
+the full result. Registry install dates are preserved as calendar dates.
 The remaining collectors and broader generic readers are unfinished Milestone 2 work.
