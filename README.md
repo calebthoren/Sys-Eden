@@ -39,6 +39,7 @@ uv run eden inspect cpu
 uv run eden inspect ram
 uv run eden inspect gpu
 uv run eden inspect storage
+uv run eden inspect network
 uv run eden inspect ram --details
 uv run eden inspect system --json
 ```
@@ -55,10 +56,14 @@ cancellation cleanup. Nothing is sent to a model or external service. RAM serial
 numbers are queried only with `--details`, and known placeholder serials are shown
 as unavailable. Firmware or drivers may leave other values blank or generic.
 
-System, CPU, RAM, GPU, and storage use the shared typed
+System, CPU, RAM, GPU, storage, and network use the shared typed
 model/collector/formatter architecture. GPU fields that standard Windows CIM
 cannot attribute reliably (modern dedicated VRAM, utilization, temperature,
 clocks, and power) remain unavailable. Storage exposes standard health and
 operational status; SMART temperature/error counters, TRIM, and encryption state
 remain unavailable until a reliable read provider is added.
+Network inspection uses local adapter/configuration/route data and performs no
+external public-IP lookup. Standard CIM does not reliably expose Wi-Fi SSID and
+signal or live per-adapter throughput on every system, so those fields may be
+unavailable.
 The remaining collectors and broader generic readers are unfinished Milestone 2 work.

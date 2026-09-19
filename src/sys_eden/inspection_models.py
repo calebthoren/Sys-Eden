@@ -290,6 +290,80 @@ class StorageInspection(InspectionModel):
     warnings: list[SourceWarning] = Field(default_factory=list)
 
 
+class NetworkIdentity(InspectionModel):
+    name: str | None = None
+    description: str | None = None
+    classification: Literal["Ethernet", "Wi-Fi", "virtual", "other"] | None = None
+
+
+class NetworkConfiguration(InspectionModel):
+    enabled: bool | None = None
+
+
+class NetworkState(InspectionModel):
+    connected: bool | None = None
+    link_speed_bps: int | None = None
+    ipv4_addresses: list[str] = Field(default_factory=list)
+    ipv6_addresses: list[str] = Field(default_factory=list)
+    default_gateways: list[str] = Field(default_factory=list)
+    dns_servers: list[str] = Field(default_factory=list)
+    receive_bytes_per_second: int | None = None
+    send_bytes_per_second: int | None = None
+    wifi_ssid: str | None = None
+    wifi_signal_percent: float | None = None
+    wifi_receive_link_speed_bps: int | None = None
+    wifi_transmit_link_speed_bps: int | None = None
+
+
+class NetworkRoute(InspectionModel):
+    destination: str | None = None
+    mask: str | None = None
+    next_hop: str | None = None
+    metric: int | None = None
+
+
+class NetworkDetails(InspectionModel):
+    mac_address: str | None = None
+    dhcp_enabled: bool | None = None
+    dhcp_server: str | None = None
+    dhcp_lease_obtained: datetime | None = None
+    dhcp_lease_expires: datetime | None = None
+    subnets: list[str] = Field(default_factory=list)
+    dns_domain: str | None = None
+    dns_suffixes: list[str] = Field(default_factory=list)
+    mtu_bytes: int | None = None
+    driver_provider: str | None = None
+    driver_version: str | None = None
+    pnp_device_id: str | None = None
+    interface_index: int | None = None
+    interface_guid: str | None = None
+    routes: list[NetworkRoute] = Field(default_factory=list)
+    receive_errors: int | None = None
+    send_errors: int | None = None
+    receive_discards: int | None = None
+    send_discards: int | None = None
+
+
+class NetworkAdapter(InspectionModel):
+    identity: NetworkIdentity
+    configuration: NetworkConfiguration
+    current_state: NetworkState
+    health_status: str | None = None
+    details: NetworkDetails | None = None
+
+
+class NetworkInspection(InspectionModel):
+    kind: Literal["network"] = "network"
+    adapters: list[NetworkAdapter] = Field(default_factory=list)
+    observations: list[Observation] = Field(default_factory=list)
+    warnings: list[SourceWarning] = Field(default_factory=list)
+
+
 InspectionData = (
-    SystemInspection | CpuInspection | MemoryInspection | GpuInspection | StorageInspection
+    SystemInspection
+    | CpuInspection
+    | MemoryInspection
+    | GpuInspection
+    | StorageInspection
+    | NetworkInspection
 )

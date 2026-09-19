@@ -11,6 +11,7 @@ from sys_eden.inspection_models import (
     GpuInspection,
     InspectionData,
     MemoryInspection,
+    NetworkInspection,
     StorageInspection,
     SystemInspection,
 )
@@ -21,6 +22,9 @@ CimClass = Literal[
     "Win32_BIOS",
     "Win32_ComputerSystem",
     "Win32_LogicalDisk",
+    "Win32_IP4RouteTable",
+    "Win32_NetworkAdapter",
+    "Win32_NetworkAdapterConfiguration",
     "Win32_OperatingSystem",
     "Win32_PerfFormattedData_PerfOS_Processor",
     "Win32_PhysicalMemory",
@@ -68,6 +72,8 @@ class InspectionProvider(Protocol):
 
     async def storage(self, *, details: bool) -> StorageInspection: ...
 
+    async def network(self, *, details: bool) -> NetworkInspection: ...
+
 
 class InspectionResult(BaseModel):
     request_id: str = Field(default_factory=lambda: str(uuid4()))
@@ -92,6 +98,8 @@ async def collect(name: str, provider: InspectionProvider, *, details: bool) -> 
             data = await provider.gpu(details=details)
         elif name == "storage":
             data = await provider.storage(details=details)
+        elif name == "network":
+            data = await provider.network(details=details)
         else:
             raise InspectionError("CapabilityUnavailable")
     except InspectionError as error:

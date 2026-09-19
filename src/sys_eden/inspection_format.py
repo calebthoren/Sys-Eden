@@ -7,6 +7,7 @@ from sys_eden.inspection_models import (
     CpuInspection,
     GpuInspection,
     MemoryInspection,
+    NetworkInspection,
     StorageInspection,
     SystemInspection,
 )
@@ -36,6 +37,22 @@ def format_frequency(value: float | None) -> str:
 
 def format_memory_speed(value: int | None) -> str:
     return UNAVAILABLE if value is None else f"{value:,} MHz"
+
+
+def format_link_speed(value: int | None) -> str:
+    if value is None:
+        return UNAVAILABLE
+    if value >= 1_000_000_000:
+        return f"{value / 1_000_000_000:.2f} Gbps"
+    if value >= 1_000_000:
+        return f"{value / 1_000_000:.0f} Mbps"
+    if value >= 1_000:
+        return f"{value / 1_000:.0f} Kbps"
+    return f"{value} bps"
+
+
+def format_throughput(value: int | None) -> str:
+    return UNAVAILABLE if value is None else f"{format_bytes(value)}/s"
 
 
 def format_percent(value: float | None) -> str:
@@ -75,7 +92,14 @@ def _section(title: str, rows: list[tuple[str, str]]) -> list[str]:
 
 
 def _footer(
-    data: SystemInspection | CpuInspection | MemoryInspection | GpuInspection | StorageInspection,
+    data: (
+        SystemInspection
+        | CpuInspection
+        | MemoryInspection
+        | GpuInspection
+        | StorageInspection
+        | NetworkInspection
+    ),
 ) -> list[str]:
     lines: list[str] = []
     if data.observations:
@@ -430,6 +454,84 @@ def _storage(data: StorageInspection) -> list[str]:
     return lines + _footer(data)
 
 
+def _network(data: NetworkInspection) -> list[str]:
+    lines = ["Network"]
+    if not data.adapters:
+        lines += _section("Adapters", [("Relevant adapters", "none detected")])
+    for index, adapter in enumerate(data.adapters, start=1):
+        lines += _section(
+            f"Adapter {index} - Identity",
+            [
+                ("Name", _text(adapter.identity.name)),
+                ("Hardware/model", _text(adapter.identity.description)),
+                ("Type", _text(adapter.identity.classification)),
+            ],
+        )
+        lines += _section(
+            f"Adapter {index} - Configuration",
+            [("Enabled", _text(adapter.configuration.enabled))],
+        )
+        state = adapter.current_state
+        state_rows = [
+                ("Connected", _text(state.connected)),
+                ("Link speed", format_link_speed(state.link_speed_bps)),
+                ("IPv4", ", ".join(state.ipv4_addresses) or UNAVAILABLE),
+                ("IPv6", ", ".join(state.ipv6_addresses) or UNAVAILABLE),
+                ("Default gateway", ", ".join(state.default_gateways) or UNAVAILABLE),
+                ("DNS servers", ", ".join(state.dns_servers) or UNAVAILABLE),
+                ("Receive throughput", format_throughput(state.receive_bytes_per_second)),
+                ("Send throughput", format_throughput(state.send_bytes_per_second)),
+        ]
+        if adapter.identity.classification == "Wi-Fi":
+            state_rows += [
+                ("Wi-Fi SSID", _text(state.wifi_ssid)),
+                ("Wi-Fi signal", format_percent(state.wifi_signal_percent)),
+                ("Wi-Fi receive speed", format_link_speed(state.wifi_receive_link_speed_bps)),
+                ("Wi-Fi transmit speed", format_link_speed(state.wifi_transmit_link_speed_bps)),
+            ]
+        lines += _section(f"Adapter {index} - Current state", state_rows)
+        lines += _section(
+            f"Adapter {index} - Health/status",
+            [("Adapter status", _text(adapter.health_status))],
+        )
+        if adapter.details:
+            item = adapter.details
+            lines += _section(
+                f"Adapter {index} - Details",
+                [
+                    ("MAC address", _text(item.mac_address)),
+                    ("DHCP enabled", _text(item.dhcp_enabled)),
+                    ("DHCP server", _text(item.dhcp_server)),
+                    ("DHCP lease obtained", format_timestamp(item.dhcp_lease_obtained)),
+                    ("DHCP lease expires", format_timestamp(item.dhcp_lease_expires)),
+                    ("Subnets/prefixes", ", ".join(item.subnets) or UNAVAILABLE),
+                    ("DNS domain", _text(item.dns_domain)),
+                    ("DNS suffixes", ", ".join(item.dns_suffixes) or UNAVAILABLE),
+                    ("MTU", _text(item.mtu_bytes)),
+                    ("Driver provider", _text(item.driver_provider)),
+                    ("Driver version", _text(item.driver_version)),
+                    ("PNP device ID", _text(item.pnp_device_id)),
+                    ("Interface index", _text(item.interface_index)),
+                    ("Interface GUID", _text(item.interface_guid)),
+                    ("Receive errors", _text(item.receive_errors)),
+                    ("Send errors", _text(item.send_errors)),
+                    ("Receive discards", _text(item.receive_discards)),
+                    ("Send discards", _text(item.send_discards)),
+                ],
+            )
+            for route_index, route in enumerate(item.routes, start=1):
+                lines += _section(
+                    f"Adapter {index} - IPv4 route {route_index}",
+                    [
+                        ("Destination", _text(route.destination)),
+                        ("Mask", _text(route.mask)),
+                        ("Next hop", _text(route.next_hop)),
+                        ("Metric", _text(route.metric)),
+                    ],
+                )
+    return lines + _footer(data)
+
+
 def render_human(result: InspectionResult) -> str:
     if not result.success or result.data is None:
         return f"{result.capability.title()}\nError: {result.error or 'unknown'}"
@@ -441,6 +543,8 @@ def render_human(result: InspectionResult) -> str:
         lines = _ram(result.data)
     elif isinstance(result.data, GpuInspection):
         lines = _gpu(result.data)
-    else:
+    elif isinstance(result.data, StorageInspection):
         lines = _storage(result.data)
+    else:
+        lines = _network(result.data)
     return "\n".join(lines)

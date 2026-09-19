@@ -2,6 +2,8 @@
 
 import re
 from datetime import UTC, datetime
+from ipaddress import ip_address
+from typing import Literal
 
 from pydantic import JsonValue
 
@@ -27,6 +29,13 @@ from sys_eden.inspection_models import (
     MemoryInspection,
     MemoryModule,
     MemoryState,
+    NetworkAdapter,
+    NetworkConfiguration,
+    NetworkDetails,
+    NetworkIdentity,
+    NetworkInspection,
+    NetworkRoute,
+    NetworkState,
     Observation,
     PhysicalDisk,
     SourceWarning,
@@ -733,6 +742,193 @@ class WindowsInspectionProvider:
             warnings=warnings,
         )
 
+    async def network(self, *, details: bool) -> NetworkInspection:
+        warnings: list[SourceWarning] = []
+        adapter_properties = [
+            "Index",
+            "NetConnectionID",
+            "Name",
+            "Description",
+            "NetEnabled",
+            "NetConnectionStatus",
+            "Speed",
+            "AdapterTypeID",
+            "PhysicalAdapter",
+            "Status",
+        ]
+        if details:
+            adapter_properties += ["InterfaceIndex", "GUID", "MACAddress", "PNPDeviceID"]
+        adapter_rows, adapters_ok = await self._query(
+            "Win32_NetworkAdapter",
+            adapter_properties,
+            warnings,
+            limit=1000,
+        )
+        config_properties = [
+            "Index",
+            "IPEnabled",
+            "IPAddress",
+            "DefaultIPGateway",
+            "DNSServerSearchOrder",
+        ]
+        if details:
+            config_properties += [
+                "DHCPEnabled",
+                "DHCPServer",
+                "DHCPLeaseObtained",
+                "DHCPLeaseExpires",
+                "IPSubnet",
+                "DNSDomain",
+                "DNSDomainSuffixSearchOrder",
+                "MTU",
+            ]
+        config_rows, configs_ok = await self._query(
+            "Win32_NetworkAdapterConfiguration",
+            config_properties,
+            warnings,
+            limit=1000,
+        )
+        if not adapters_ok and not configs_ok:
+            raise InspectionError("InspectionUnavailable")
+        configs = {_integer(row.get("Index")): row for row in config_rows}
+        relevant = [
+            row
+            for row in adapter_rows
+            if _clean(row.get("NetConnectionID"))
+            or _boolean(configs.get(_integer(row.get("Index")), {}).get("IPEnabled"))
+        ]
+        drivers: list[dict[str, JsonValue]] = []
+        routes: list[dict[str, JsonValue]] = []
+        if details:
+            drivers, _ = await self._query(
+                "Win32_PnPSignedDriver",
+                ["DeviceID", "DriverProviderName", "DriverVersion"],
+                warnings,
+                limit=1000,
+            )
+            routes, _ = await self._query(
+                "Win32_IP4RouteTable",
+                ["InterfaceIndex", "Destination", "Mask", "NextHop", "Metric1"],
+                warnings,
+                limit=1000,
+            )
+        adapters = [
+            self._network_adapter(
+                row,
+                configs.get(_integer(row.get("Index")), {}),
+                drivers,
+                routes,
+                details,
+            )
+            for row in relevant
+        ]
+        return NetworkInspection(adapters=adapters, warnings=warnings)
+
+    def _network_adapter(
+        self,
+        row: dict[str, JsonValue],
+        config: dict[str, JsonValue],
+        drivers: list[dict[str, JsonValue]],
+        routes: list[dict[str, JsonValue]],
+        details: bool,
+    ) -> NetworkAdapter:
+        addresses = self._strings(config.get("IPAddress"))
+        ipv4_addresses = []
+        ipv6_addresses = []
+        for address in addresses:
+            try:
+                version = ip_address(address.split("%", maxsplit=1)[0]).version
+            except ValueError:
+                continue
+            (ipv4_addresses if version == 4 else ipv6_addresses).append(address)
+        pnp_id = _clean(row.get("PNPDeviceID"))
+        driver = next(
+            (
+                item
+                for item in drivers
+                if (_clean(item.get("DeviceID")) or "").casefold()
+                == (pnp_id or "").casefold()
+            ),
+            {},
+        )
+        interface_index = _integer(row.get("InterfaceIndex"))
+        matching_routes = [
+            NetworkRoute(
+                destination=_clean(item.get("Destination")),
+                mask=_clean(item.get("Mask")),
+                next_hop=_clean(item.get("NextHop")),
+                metric=_integer(item.get("Metric1")),
+            )
+            for item in routes
+            if _integer(item.get("InterfaceIndex")) == interface_index
+        ]
+        connection_status = _integer(row.get("NetConnectionStatus"))
+        return NetworkAdapter(
+            identity=NetworkIdentity(
+                name=_clean(row.get("NetConnectionID")) or _clean(row.get("Name")),
+                description=_clean(row.get("Description")),
+                classification=self._network_classification(row),
+            ),
+            configuration=NetworkConfiguration(enabled=_boolean(row.get("NetEnabled"))),
+            current_state=NetworkState(
+                connected=(connection_status == 2 if connection_status is not None else None),
+                link_speed_bps=self._positive_integer(row.get("Speed")),
+                ipv4_addresses=ipv4_addresses,
+                ipv6_addresses=ipv6_addresses,
+                default_gateways=self._strings(config.get("DefaultIPGateway")),
+                dns_servers=self._strings(config.get("DNSServerSearchOrder")),
+            ),
+            health_status=_clean(row.get("Status")),
+            details=(
+                NetworkDetails(
+                    mac_address=_clean(row.get("MACAddress")),
+                    dhcp_enabled=_boolean(config.get("DHCPEnabled")),
+                    dhcp_server=_clean(config.get("DHCPServer")),
+                    dhcp_lease_obtained=_datetime(config.get("DHCPLeaseObtained")),
+                    dhcp_lease_expires=_datetime(config.get("DHCPLeaseExpires")),
+                    subnets=self._strings(config.get("IPSubnet")),
+                    dns_domain=_clean(config.get("DNSDomain")),
+                    dns_suffixes=self._strings(config.get("DNSDomainSuffixSearchOrder")),
+                    mtu_bytes=_integer(config.get("MTU")),
+                    driver_provider=_clean(driver.get("DriverProviderName")),
+                    driver_version=_clean(driver.get("DriverVersion")),
+                    pnp_device_id=pnp_id,
+                    interface_index=interface_index,
+                    interface_guid=_clean(row.get("GUID")),
+                    routes=matching_routes,
+                )
+                if details
+                else None
+            ),
+        )
+
+    @staticmethod
+    def _network_classification(
+        row: dict[str, JsonValue],
+    ) -> Literal["Ethernet", "Wi-Fi", "virtual", "other"]:
+        if _boolean(row.get("PhysicalAdapter")) is False:
+            return "virtual"
+        adapter_type = _integer(row.get("AdapterTypeID"))
+        combined_name = " ".join(
+            filter(
+                None,
+                [
+                    _clean(row.get("NetConnectionID")),
+                    _clean(row.get("Name")),
+                    _clean(row.get("Description")),
+                ],
+            )
+        ).casefold()
+        if "bluetooth" in combined_name:
+            return "other"
+        if adapter_type == 9 or any(
+            token in combined_name for token in ("wi-fi", "wireless", "802.11")
+        ):
+            return "Wi-Fi"
+        if adapter_type == 0:
+            return "Ethernet"
+        return "other"
+
     def _physical_disk(
         self,
         row: dict[str, JsonValue],
@@ -857,6 +1053,16 @@ class WindowsInspectionProvider:
             if code is not None:
                 result.append(_OPERATIONAL_STATUSES.get(code, f"Code {code}"))
         return result
+
+    @staticmethod
+    def _strings(value: JsonValue | None) -> list[str]:
+        values = value if isinstance(value, list) else [value]
+        return [text for item in values if (text := _clean(item)) is not None]
+
+    @staticmethod
+    def _positive_integer(value: JsonValue | None) -> int | None:
+        number = _integer(value)
+        return number if number is not None and number > 0 else None
 
     @staticmethod
     def _memory_module(row: dict[str, JsonValue]) -> MemoryModule:

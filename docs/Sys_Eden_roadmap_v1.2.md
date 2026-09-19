@@ -26,7 +26,9 @@ honest unavailable values, consistent units, partial-source warnings, and clearl
 labeled evidence observations. `system`, `cpu`, `ram`, `gpu`, and `storage` have
 been migrated. GPU and storage deliberately preserve unavailable values where
 standard Windows providers cannot supply reliable telemetry or health counters.
-Remaining work includes networking, processes,
+`network` now provides local adapter identity, connection/IP/DNS state, and
+curated DHCP/driver/route details without external address lookup.
+Remaining work includes processes,
 services, startup, drivers, software, event logs, crashes, and broader generic
 read interfaces. Milestone 2 acceptance has not yet been reached.
 The repository retains the initial `src/sys_eden/` package spelling.

@@ -106,6 +106,55 @@ class FixtureReader:
                     "DriverDate": "/Date(1735689600000)/",
                     "InfName": "fixture.inf",
                     "IsSigned": True,
+                },
+                {
+                    "DeviceID": "PCI\\VEN_NETWORK",
+                    "DriverProviderName": "Fixture Network Provider",
+                    "DriverVersion": "4.5.6",
+                },
+            ],
+            "Win32_NetworkAdapter": [
+                {
+                    "Index": 7,
+                    "InterfaceIndex": 12,
+                    "GUID": "{fixture-guid}",
+                    "NetConnectionID": "Ethernet",
+                    "Name": "Fixture Ethernet",
+                    "Description": "Fixture 2.5GbE Adapter",
+                    "NetEnabled": True,
+                    "NetConnectionStatus": 2,
+                    "Speed": 2500000000,
+                    "AdapterTypeID": 0,
+                    "PhysicalAdapter": True,
+                    "MACAddress": "00:11:22:33:44:55",
+                    "PNPDeviceID": "PCI\\VEN_NETWORK",
+                    "Status": "OK",
+                }
+            ],
+            "Win32_NetworkAdapterConfiguration": [
+                {
+                    "Index": 7,
+                    "IPEnabled": True,
+                    "IPAddress": ["192.0.2.10", "2001:db8::10"],
+                    "DefaultIPGateway": ["192.0.2.1"],
+                    "DNSServerSearchOrder": ["192.0.2.53", "2001:db8::53"],
+                    "DHCPEnabled": True,
+                    "DHCPServer": "192.0.2.1",
+                    "DHCPLeaseObtained": "/Date(1767225600000)/",
+                    "DHCPLeaseExpires": "/Date(1767312000000)/",
+                    "IPSubnet": ["255.255.255.0", "64"],
+                    "DNSDomain": "example.test",
+                    "DNSDomainSuffixSearchOrder": ["example.test"],
+                    "MTU": 1500,
+                }
+            ],
+            "Win32_IP4RouteTable": [
+                {
+                    "InterfaceIndex": 12,
+                    "Destination": "0.0.0.0",
+                    "Mask": "0.0.0.0",
+                    "NextHop": "192.0.2.1",
+                    "Metric1": 25,
                 }
             ],
             "Win32_LogicalDisk": [
@@ -312,6 +361,50 @@ async def test_storage_reports_disks_volumes_details_and_low_space_observation()
 
 
 @pytest.mark.asyncio
+async def test_network_default_and_details_are_scoped_and_structured():
+    reader = FixtureReader()
+    provider = WindowsInspectionProvider(reader)
+    basic = await provider.network(details=False)
+    assert len(basic.adapters) == 1
+    adapter = basic.adapters[0]
+    assert adapter.identity.classification == "Ethernet"
+    assert adapter.current_state.connected
+    assert adapter.current_state.link_speed_bps == 2500000000
+    assert adapter.current_state.ipv4_addresses == ["192.0.2.10"]
+    assert adapter.current_state.ipv6_addresses == ["2001:db8::10"]
+    assert adapter.details is None
+    adapter_request = next(
+        request for request in reader.requests if request.class_name == "Win32_NetworkAdapter"
+    )
+    assert "MACAddress" not in adapter_request.properties
+
+    detailed = await provider.network(details=True)
+    item = detailed.adapters[0].details
+    assert item is not None
+    assert item.mac_address == "00:11:22:33:44:55"
+    assert item.driver_provider == "Fixture Network Provider"
+    assert item.mtu_bytes == 1500
+    assert item.routes[0].next_hop == "192.0.2.1"
+    assert detailed.adapters[0].current_state.wifi_ssid is None
+
+
+@pytest.mark.asyncio
+async def test_network_classifies_bluetooth_and_omits_zero_link_speed():
+    reader = FixtureReader()
+    reader.rows["Win32_NetworkAdapter"][0].update(
+        {
+            "Name": "Bluetooth Device (Personal Area Network)",
+            "Description": "Bluetooth Device",
+            "NetConnectionID": "Bluetooth Network Connection",
+            "Speed": 0,
+        }
+    )
+    result = await WindowsInspectionProvider(reader).network(details=False)
+    assert result.adapters[0].identity.classification == "other"
+    assert result.adapters[0].current_state.link_speed_bps is None
+
+
+@pytest.mark.asyncio
 async def test_partial_source_failure_is_reported_without_losing_other_evidence():
     class PartialReader(FixtureReader):
         async def query(self, request: CimQuery) -> list[dict[str, JsonValue]]:
@@ -341,6 +434,9 @@ async def test_collect_wraps_provider_failure():
             raise InspectionError("PermissionDenied")
 
         async def storage(self, *, details: bool):
+            raise InspectionError("PermissionDenied")
+
+        async def network(self, *, details: bool):
             raise InspectionError("PermissionDenied")
 
     result = await collect("cpu", Provider(), details=False)
