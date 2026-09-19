@@ -1,6 +1,6 @@
 # Sys Eden
 
-Local-first Windows system companion, currently in Phase 0 (repository preparation).
+Local-first Windows system companion, currently implementing Milestone 1 (Core skeleton).
 
 Read [AGENTS.md](AGENTS.md) and the versioned canonical documents in [docs](docs/).
 The roadmap owns implementation order.
@@ -22,5 +22,10 @@ Budget enforcement belongs to subsequent storage work. Configuration loading doe
 not create directories. Development runtime data belongs in ignored `data/`.
 Do not put credentials in configuration or application log messages.
 
-The existing `eden health` command is a stub, pending Milestone 1 database and
-provider health checks. `migrations/` is reserved for that milestone's Alembic baseline.
+`uv run eden health` initializes the development SQLite database through packaged
+Alembic migrations and returns JSON health for Core, configuration, database, and
+the explicitly fake model provider. Failed checks return exit code 1. Health logs
+are JSON on stderr. SQLite uses WAL, foreign keys, and a five-second busy timeout.
+Existing unknown schema versions are rejected; a verified SQLite backup is retained
+before baseline migration. Sessions commit on success and roll back on failure.
+The in-process async event bus has bounded delivery and propagates handler failures.

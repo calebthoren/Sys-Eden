@@ -10,6 +10,17 @@
 
 # 1. Purpose
 
+## Implementation checkpoint — 2026-09-18
+
+Phase 0 and Milestone 1 have passed their functional acceptance checks:
+configuration and independent storage budgets, structured logging, SQLite/WAL and
+transactional sessions, packaged Alembic baseline, in-process async events,
+fake-provider health, and CLI bootstrap. Validation: 15 tests, Ruff, Pyright,
+`uv sync`, CLI help/health, package build, and isolated packaged bootstrap.
+The next implementation milestone is Milestone 2, read-only Windows inspection.
+The repository retains the initial `src/sys_eden/` package spelling.
+
+
 This roadmap turns the Sys Eden architecture into an implementation sequence.
 
 It intentionally avoids planning every future feature in detail.
