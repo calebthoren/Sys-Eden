@@ -1,4 +1,4 @@
-"""Structured, local-only inspection boundaries and initial collectors."""
+"""Inspection orchestration and narrow generic read interfaces."""
 
 from datetime import UTC, datetime
 from typing import Annotated, Literal, Protocol
@@ -6,13 +6,34 @@ from uuid import uuid4
 
 from pydantic import BaseModel, Field, JsonValue
 
+from sys_eden.inspection_models import (
+    CpuInspection,
+    InspectionData,
+    MemoryInspection,
+    SystemInspection,
+)
+
 Identifier = Annotated[str, Field(pattern=r"^[A-Za-z_][A-Za-z0-9_]*$")]
+CimClass = Literal[
+    "Win32_BaseBoard",
+    "Win32_BIOS",
+    "Win32_ComputerSystem",
+    "Win32_LogicalDisk",
+    "Win32_OperatingSystem",
+    "Win32_PerfFormattedData_PerfOS_Processor",
+    "Win32_PhysicalMemory",
+    "Win32_Processor",
+    "Win32_Tpm",
+    "Win32_VideoController",
+]
+CimNamespace = Literal["root/cimv2", "root/cimv2/Security/MicrosoftTpm"]
 
 
 class CimQuery(BaseModel):
-    # Expand after reviewing provider behavior; Win32_Product can trigger repairs.
-    class_name: Literal["Win32_OperatingSystem", "Win32_Processor", "Win32_PhysicalMemory"]
+    # The allowlist excludes providers such as Win32_Product that can trigger repairs.
+    class_name: CimClass
     properties: list[Identifier] = Field(min_length=1, max_length=32)
+    namespace: CimNamespace = "root/cimv2"
     limit: int = Field(default=100, ge=1, le=1000)
 
 
@@ -26,54 +47,47 @@ class CimReader(Protocol):
     async def query(self, request: CimQuery) -> list[dict[str, JsonValue]]: ...
 
 
+class InspectionProvider(Protocol):
+    async def system(self, *, details: bool) -> SystemInspection: ...
+
+    async def cpu(self, *, details: bool) -> CpuInspection: ...
+
+    async def ram(self, *, details: bool) -> MemoryInspection: ...
+
+
 class InspectionResult(BaseModel):
     request_id: str = Field(default_factory=lambda: str(uuid4()))
     capability: str
     started_at: datetime
     finished_at: datetime
     success: bool
-    data: list[dict[str, JsonValue]] = Field(default_factory=list)
+    data: InspectionData | None = None
     error: str | None = None
 
 
-QUERIES = {
-    "os": CimQuery(
-        class_name="Win32_OperatingSystem",
-        properties=["Caption", "Version", "BuildNumber", "LastBootUpTime", "LocalDateTime"],
-    ),
-    "cpu": CimQuery(
-        class_name="Win32_Processor",
-        properties=["Name", "NumberOfCores", "NumberOfLogicalProcessors", "MaxClockSpeed"],
-    ),
-    "ram": CimQuery(
-        class_name="Win32_PhysicalMemory",
-        properties=[
-            "Manufacturer",
-            "Model",
-            "PartNumber",
-            "DeviceLocator",
-            "BankLabel",
-            "Capacity",
-            "Speed",
-            "ConfiguredClockSpeed",
-            "FormFactor",
-            "SMBIOSMemoryType",
-        ],
-    ),
-}
-
-
-async def collect(name: str, reader: CimReader) -> InspectionResult:
-    query = QUERIES[name]
+async def collect(name: str, provider: InspectionProvider, *, details: bool) -> InspectionResult:
     started = datetime.now(UTC)
     try:
-        data = await reader.query(query)
+        if name == "system":
+            data: InspectionData = await provider.system(details=details)
+        elif name == "cpu":
+            data = await provider.cpu(details=details)
+        elif name == "ram":
+            data = await provider.ram(details=details)
+        else:
+            raise InspectionError("CapabilityUnavailable")
     except InspectionError as error:
         return InspectionResult(
-            capability=name, started_at=started, finished_at=datetime.now(UTC),
-            success=False, error=error.code,
+            capability=name,
+            started_at=started,
+            finished_at=datetime.now(UTC),
+            success=False,
+            error=error.code,
         )
     return InspectionResult(
-        capability=name, started_at=started, finished_at=datetime.now(UTC),
-        success=True, data=data,
+        capability=name,
+        started_at=started,
+        finished_at=datetime.now(UTC),
+        success=True,
+        data=data,
     )

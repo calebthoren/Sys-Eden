@@ -34,17 +34,24 @@ Initial read-only inspection commands:
 
 ```powershell
 uv run eden inspect
-uv run eden inspect os
+uv run eden inspect system
 uv run eden inspect cpu
 uv run eden inspect ram
+uv run eden inspect ram --details
+uv run eden inspect system --json
 ```
 
-These return timestamped JSON results using a fixed Windows PowerShell CIM reader
-in the current user's context. Requests are passed as JSON, with a 20-second
-timeout and cancellation cleanup. Nothing is sent to a model or external service.
-RAM inspection reports each module's manufacturer, model, part number (often the
-most useful Windows/SMBIOS model identifier), physical slot, bank, capacity, current
-and configured speed, form factor, and SMBIOS memory type. Firmware may leave
-some identity fields blank or return generic values.
-The initial generic CIM interface supports the three reviewed provider classes;
-the remaining collectors and generic readers are unfinished Milestone 2 work.
+Default inspection output is a concise human view grouped into identity,
+configuration, current state, health, and observations. `--details` collects and
+shows a curated diagnostic/inventory view; it is not a raw WMI dump. `--json`
+serializes the same typed Pydantic result, preserving unavailable values as `null`.
+The old `os` spelling remains an alias for `system`.
+
+The fixed Windows PowerShell CIM reader runs in the current user's context.
+Requests are allowlisted, passed as JSON, and bounded by a 20-second timeout with
+cancellation cleanup. Nothing is sent to a model or external service. RAM serial
+numbers are queried only with `--details`, and known placeholder serials are shown
+as unavailable. Firmware or drivers may leave other values blank or generic.
+
+System, CPU, and RAM use the shared typed model/collector/formatter architecture.
+The remaining collectors and broader generic readers are unfinished Milestone 2 work.

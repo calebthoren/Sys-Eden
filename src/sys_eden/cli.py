@@ -8,9 +8,11 @@ from pydantic_settings import SettingsError
 
 from sys_eden.config import load_settings
 from sys_eden.core import Core
-from sys_eden.inspection import QUERIES, collect
+from sys_eden.inspection import collect
+from sys_eden.inspection_format import render_human
 from sys_eden.logging import configure_logging
 from sys_eden.windows import WindowsCimReader
+from sys_eden.windows_collectors import WindowsInspectionProvider
 
 app = typer.Typer(
     name="eden",
@@ -40,18 +42,30 @@ def health() -> None:
 
 
 @app.command()
-def inspect(component: Annotated[str, typer.Argument()] = "all") -> None:
-    """Read OS, CPU, and RAM information locally as the current user."""
-    if component != "all" and component not in QUERIES:
-        raise typer.BadParameter("Supported components: all, os, cpu, ram")
+def inspect(
+    component: Annotated[str, typer.Argument()] = "system",
+    details: Annotated[
+        bool, typer.Option("--details", help="Show curated diagnostic and inventory fields.")
+    ] = False,
+    json_output: Annotated[
+        bool, typer.Option("--json", help="Emit the structured result as JSON.")
+    ] = False,
+) -> None:
+    """Inspect local Windows state without changing the machine."""
+    component = "system" if component == "os" else component
+    supported = ("system", "cpu", "ram")
+    if component != "all" and component not in supported:
+        raise typer.BadParameter("Supported components: all, system, cpu, ram")
 
     async def run():
-        reader = WindowsCimReader()
-        return [await collect(name, reader) for name in (
-            list(QUERIES) if component == "all" else [component]
-        )]
+        provider = WindowsInspectionProvider(WindowsCimReader())
+        names = supported if component == "all" else (component,)
+        return [await collect(name, provider, details=details) for name in names]
 
     results = asyncio.run(run())
-    typer.echo(json.dumps([result.model_dump(mode="json") for result in results], indent=2))
+    if json_output:
+        typer.echo(json.dumps([result.model_dump(mode="json") for result in results], indent=2))
+    else:
+        typer.echo("\n\n".join(render_human(result) for result in results))
     if any(not result.success for result in results):
         raise typer.Exit(1)

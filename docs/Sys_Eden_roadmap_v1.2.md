@@ -20,6 +20,10 @@ fake-provider health, and CLI bootstrap. Validation: 15 tests, Ruff, Pyright,
 The current implementation milestone is Milestone 2, read-only Windows inspection.
 Its first slice adds OS/build/boot timestamps, CPU, and RAM collectors, a
 parameterized CIM reader for those provider classes, and the `eden inspect` CLI.
+The current refinement standardizes these collectors around typed domain models,
+separate human/JSON presentation, concise default output, curated `--details`,
+honest unavailable values, consistent units, partial-source warnings, and clearly
+labeled evidence observations. `system`, `cpu`, and `ram` have been migrated.
 Remaining work includes explicit uptime, GPU, storage, networking, processes,
 services, startup, drivers, software, event logs, crashes, and broader generic
 read interfaces. Milestone 2 acceptance has not yet been reached.

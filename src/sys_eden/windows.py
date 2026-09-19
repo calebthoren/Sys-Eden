@@ -17,7 +17,7 @@ $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
 try {
     $request = [Console]::In.ReadToEnd() | ConvertFrom-Json
-    $rows = @(Get-CimInstance -Namespace root/cimv2 -ClassName $request.class_name |
+    $rows = @(Get-CimInstance -Namespace $request.namespace -ClassName $request.class_name |
         Select-Object -First $request.limit -Property $request.properties)
     ConvertTo-Json -InputObject $rows -Depth 5 -Compress
 } catch {
