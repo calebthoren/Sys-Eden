@@ -40,6 +40,8 @@ uv run eden inspect ram
 uv run eden inspect gpu
 uv run eden inspect storage
 uv run eden inspect network
+uv run eden inspect processes
+uv run eden inspect services
 uv run eden inspect ram --details
 uv run eden inspect system --json
 ```
@@ -66,4 +68,11 @@ Network inspection uses local adapter/configuration/route data and performs no
 external public-IP lookup. Standard CIM does not reliably expose Wi-Fi SSID and
 signal or live per-adapter throughput on every system, so those fields may be
 unavailable.
+Process inspection ranks the 20 most resource-relevant processes by normalized
+CPU and private memory in normal output; `--details` expands to 100 and adds
+available paths, command lines, parent/start/thread/handle information, and I/O.
+Protected fields and process owners may be unavailable. Service inspection keeps
+normal rows compact while `--details` adds paths, accounts, descriptions, PIDs,
+startup behavior, service types, and exit codes. Dependency relationships are
+reserved in the schema but unavailable from the current generic reader.
 The remaining collectors and broader generic readers are unfinished Milestone 2 work.

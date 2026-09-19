@@ -40,6 +40,7 @@ class FixtureReader:
                     "Model": "Model One",
                     "TotalPhysicalMemory": 34359738368,
                     "HypervisorPresent": False,
+                    "NumberOfLogicalProcessors": 4,
                 }
             ],
             "Win32_OperatingSystem": [
@@ -155,6 +156,80 @@ class FixtureReader:
                     "Mask": "0.0.0.0",
                     "NextHop": "192.0.2.1",
                     "Metric1": 25,
+                }
+            ],
+            "Win32_Process": [
+                {
+                    "ProcessId": 10,
+                    "Name": "busy.exe",
+                    "ExecutionState": None,
+                    "ExecutablePath": "C:\\Apps\\busy.exe",
+                    "CommandLine": '"C:\\Apps\\busy.exe" --work',
+                    "ParentProcessId": 4,
+                    "CreationDate": "/Date(1767225600000)/",
+                    "ThreadCount": 8,
+                    "HandleCount": 100,
+                },
+                {
+                    "ProcessId": 20,
+                    "Name": "memory.exe",
+                    "ExecutionState": None,
+                    "ExecutablePath": None,
+                    "CommandLine": None,
+                    "ParentProcessId": 4,
+                    "CreationDate": None,
+                    "ThreadCount": 4,
+                    "HandleCount": 50,
+                },
+            ],
+            "Win32_PerfFormattedData_PerfProc_Process": [
+                {
+                    "IDProcess": 10,
+                    "Name": "busy",
+                    "PercentProcessorTime": 200,
+                    "WorkingSetPrivate": 1000,
+                    "IOReadBytesPerSec": 20,
+                    "IOWriteBytesPerSec": 30,
+                    "ThreadCount": 8,
+                    "HandleCount": 100,
+                },
+                {
+                    "IDProcess": 20,
+                    "Name": "memory",
+                    "PercentProcessorTime": 40,
+                    "WorkingSetPrivate": 2000,
+                    "IOReadBytesPerSec": 0,
+                    "IOWriteBytesPerSec": 0,
+                    "ThreadCount": 4,
+                    "HandleCount": 50,
+                },
+                {
+                    "IDProcess": 0,
+                    "Name": "_Total",
+                    "PercentProcessorTime": 400,
+                    "WorkingSetPrivate": 999999,
+                    "IOReadBytesPerSec": 0,
+                    "IOWriteBytesPerSec": 0,
+                    "ThreadCount": 1,
+                    "HandleCount": 1,
+                },
+            ],
+            "Win32_Service": [
+                {
+                    "Name": "FixtureService",
+                    "DisplayName": "Fixture Service",
+                    "State": "Running",
+                    "StartMode": "Auto",
+                    "Status": "OK",
+                    "Started": True,
+                    "PathName": '"C:\\Apps\\service.exe"',
+                    "StartName": "LocalSystem",
+                    "Description": "Fixture service",
+                    "ProcessId": 123,
+                    "DelayedAutoStart": False,
+                    "ServiceType": "Own Process",
+                    "ExitCode": 0,
+                    "ServiceSpecificExitCode": 0,
                 }
             ],
             "Win32_LogicalDisk": [
@@ -405,6 +480,45 @@ async def test_network_classifies_bluetooth_and_omits_zero_link_speed():
 
 
 @pytest.mark.asyncio
+async def test_processes_are_ranked_and_details_tolerate_protected_fields():
+    reader = FixtureReader()
+    provider = WindowsInspectionProvider(reader)
+    basic = await provider.processes(details=False)
+    assert basic.total_detected == 2
+    assert basic.processes[0].identity.pid == 10
+    assert basic.processes[0].current_state.cpu_percent == 50
+    assert basic.processes[0].current_state.user is None
+    assert basic.processes[0].details is None
+    process_request = next(
+        request for request in reader.requests if request.class_name == "Win32_Process"
+    )
+    assert "CommandLine" not in process_request.properties
+
+    detailed = await provider.processes(details=True)
+    assert detailed.processes[0].details is not None
+    assert detailed.processes[0].details.executable_path == "C:\\Apps\\busy.exe"
+    protected = next(item for item in detailed.processes if item.identity.pid == 20)
+    assert protected.details is not None
+    assert protected.details.executable_path is None
+
+
+@pytest.mark.asyncio
+async def test_services_default_and_details_are_curated():
+    reader = FixtureReader()
+    provider = WindowsInspectionProvider(reader)
+    basic = await provider.services(details=False)
+    assert basic.services[0].identity.name == "FixtureService"
+    assert basic.services[0].configuration.startup_type == "Auto"
+    assert basic.services[0].current_state.state == "Running"
+    assert basic.services[0].details is None
+
+    detailed = await provider.services(details=True)
+    assert detailed.services[0].details is not None
+    assert detailed.services[0].details.service_account == "LocalSystem"
+    assert detailed.services[0].details.pid == 123
+
+
+@pytest.mark.asyncio
 async def test_partial_source_failure_is_reported_without_losing_other_evidence():
     class PartialReader(FixtureReader):
         async def query(self, request: CimQuery) -> list[dict[str, JsonValue]]:
@@ -437,6 +551,12 @@ async def test_collect_wraps_provider_failure():
             raise InspectionError("PermissionDenied")
 
         async def network(self, *, details: bool):
+            raise InspectionError("PermissionDenied")
+
+        async def processes(self, *, details: bool):
+            raise InspectionError("PermissionDenied")
+
+        async def services(self, *, details: bool):
             raise InspectionError("PermissionDenied")
 
     result = await collect("cpu", Provider(), details=False)

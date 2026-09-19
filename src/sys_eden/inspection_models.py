@@ -359,6 +359,95 @@ class NetworkInspection(InspectionModel):
     warnings: list[SourceWarning] = Field(default_factory=list)
 
 
+class ProcessIdentity(InspectionModel):
+    pid: int
+    name: str | None = None
+
+
+class ProcessConfiguration(InspectionModel):
+    executable_name: str | None = None
+
+
+class ProcessState(InspectionModel):
+    cpu_percent: float | None = None
+    memory_bytes: int | None = None
+    user: str | None = None
+    status: str | None = None
+
+
+class ProcessDetails(InspectionModel):
+    executable_path: str | None = None
+    command_line: str | None = None
+    parent_pid: int | None = None
+    start_time: datetime | None = None
+    thread_count: int | None = None
+    handle_count: int | None = None
+    io_read_bytes_per_second: int | None = None
+    io_write_bytes_per_second: int | None = None
+    architecture: str | None = None
+    publisher: str | None = None
+    digitally_signed: bool | None = None
+
+
+class ProcessEntry(InspectionModel):
+    identity: ProcessIdentity
+    configuration: ProcessConfiguration
+    current_state: ProcessState
+    health_status: str | None = None
+    details: ProcessDetails | None = None
+
+
+class ProcessesInspection(InspectionModel):
+    kind: Literal["processes"] = "processes"
+    total_detected: int
+    returned_count: int
+    processes: list[ProcessEntry] = Field(default_factory=list)
+    observations: list[Observation] = Field(default_factory=list)
+    warnings: list[SourceWarning] = Field(default_factory=list)
+
+
+class ServiceIdentity(InspectionModel):
+    name: str
+    display_name: str | None = None
+
+
+class ServiceConfiguration(InspectionModel):
+    startup_type: str | None = None
+
+
+class ServiceState(InspectionModel):
+    state: str | None = None
+    started: bool | None = None
+
+
+class ServiceDetails(InspectionModel):
+    binary_path: str | None = None
+    service_account: str | None = None
+    description: str | None = None
+    pid: int | None = None
+    dependencies: list[str] = Field(default_factory=list)
+    dependent_services: list[str] = Field(default_factory=list)
+    delayed_auto_start: bool | None = None
+    service_type: str | None = None
+    exit_code: int | None = None
+    service_specific_exit_code: int | None = None
+
+
+class ServiceEntry(InspectionModel):
+    identity: ServiceIdentity
+    configuration: ServiceConfiguration
+    current_state: ServiceState
+    health_status: str | None = None
+    details: ServiceDetails | None = None
+
+
+class ServicesInspection(InspectionModel):
+    kind: Literal["services"] = "services"
+    services: list[ServiceEntry] = Field(default_factory=list)
+    observations: list[Observation] = Field(default_factory=list)
+    warnings: list[SourceWarning] = Field(default_factory=list)
+
+
 InspectionData = (
     SystemInspection
     | CpuInspection
@@ -366,4 +455,6 @@ InspectionData = (
     | GpuInspection
     | StorageInspection
     | NetworkInspection
+    | ProcessesInspection
+    | ServicesInspection
 )

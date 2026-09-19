@@ -38,6 +38,18 @@ from sys_eden.inspection_models import (
     NetworkState,
     Observation,
     PhysicalDisk,
+    ProcessConfiguration,
+    ProcessDetails,
+    ProcessEntry,
+    ProcessesInspection,
+    ProcessIdentity,
+    ProcessState,
+    ServiceConfiguration,
+    ServiceDetails,
+    ServiceEntry,
+    ServiceIdentity,
+    ServicesInspection,
+    ServiceState,
     SourceWarning,
     StorageInspection,
     StorageVolume,
@@ -823,6 +835,201 @@ class WindowsInspectionProvider:
             for row in relevant
         ]
         return NetworkInspection(adapters=adapters, warnings=warnings)
+
+    async def processes(self, *, details: bool) -> ProcessesInspection:
+        warnings: list[SourceWarning] = []
+        process_properties = ["ProcessId", "Name", "ExecutionState"]
+        if details:
+            process_properties += [
+                "ExecutablePath",
+                "CommandLine",
+                "ParentProcessId",
+                "CreationDate",
+                "ThreadCount",
+                "HandleCount",
+            ]
+        process_rows, process_ok = await self._query(
+            "Win32_Process", process_properties, warnings, limit=1000
+        )
+        performance_rows, performance_ok = await self._query(
+            "Win32_PerfFormattedData_PerfProc_Process",
+            [
+                "IDProcess",
+                "Name",
+                "PercentProcessorTime",
+                "WorkingSetPrivate",
+                "IOReadBytesPerSec",
+                "IOWriteBytesPerSec",
+                "ThreadCount",
+                "HandleCount",
+            ],
+            warnings,
+            limit=1000,
+        )
+        if not process_ok and not performance_ok:
+            raise InspectionError("InspectionUnavailable")
+        computers, _ = await self._query(
+            "Win32_ComputerSystem", ["NumberOfLogicalProcessors"], warnings, limit=1
+        )
+        logical_processors = _integer(_first(computers).get("NumberOfLogicalProcessors")) or 1
+        performance = {
+            pid: row
+            for row in performance_rows
+            if (pid := _integer(row.get("IDProcess"))) is not None
+            and _clean(row.get("Name")) != "_Total"
+        }
+        entries: list[ProcessEntry] = []
+        for row in process_rows:
+            pid = _integer(row.get("ProcessId"))
+            if pid is not None and pid != 0:
+                entries.append(
+                    self._process_entry(
+                        row,
+                        performance.get(pid, {}),
+                        details,
+                        logical_processors,
+                    )
+                )
+        entries.sort(
+            key=lambda item: (
+                item.current_state.cpu_percent or 0,
+                item.current_state.memory_bytes or 0,
+            ),
+            reverse=True,
+        )
+        limit = 100 if details else 20
+        selected = entries[:limit]
+        observations: list[Observation] = []
+        if len(entries) > len(selected):
+            observations.append(
+                Observation(
+                    code="process_list_truncated",
+                    message=(
+                        f"Showing {len(selected)} of {len(entries)} processes, ranked by CPU "
+                        "and private memory usage."
+                    ),
+                )
+            )
+        return ProcessesInspection(
+            total_detected=len(entries),
+            returned_count=len(selected),
+            processes=selected,
+            observations=observations,
+            warnings=warnings,
+        )
+
+    def _process_entry(
+        self,
+        row: dict[str, JsonValue],
+        performance: dict[str, JsonValue],
+        details: bool,
+        logical_processors: int,
+    ) -> ProcessEntry:
+        pid = _integer(row.get("ProcessId"))
+        if pid is None:
+            raise InspectionError("InvalidToolOutput")
+        raw_cpu = _number(performance.get("PercentProcessorTime"))
+        normalized_cpu = (
+            min(100.0, raw_cpu / logical_processors) if raw_cpu is not None else None
+        )
+        name = _clean(row.get("Name"))
+        return ProcessEntry(
+            identity=ProcessIdentity(pid=pid, name=name),
+            configuration=ProcessConfiguration(executable_name=name),
+            current_state=ProcessState(
+                cpu_percent=normalized_cpu,
+                memory_bytes=_integer(performance.get("WorkingSetPrivate")),
+                # Win32_Process owner requires a separate method call and may be protected.
+                user=None,
+                status="running",
+            ),
+            details=(
+                ProcessDetails(
+                    executable_path=_clean(row.get("ExecutablePath")),
+                    command_line=_clean(row.get("CommandLine")),
+                    parent_pid=_integer(row.get("ParentProcessId")),
+                    start_time=_datetime(row.get("CreationDate")),
+                    thread_count=(
+                        _integer(row.get("ThreadCount"))
+                        or _integer(performance.get("ThreadCount"))
+                    ),
+                    handle_count=(
+                        _integer(row.get("HandleCount"))
+                        or _integer(performance.get("HandleCount"))
+                    ),
+                    io_read_bytes_per_second=_integer(
+                        performance.get("IOReadBytesPerSec")
+                    ),
+                    io_write_bytes_per_second=_integer(
+                        performance.get("IOWriteBytesPerSec")
+                    ),
+                )
+                if details
+                else None
+            ),
+        )
+
+    async def services(self, *, details: bool) -> ServicesInspection:
+        warnings: list[SourceWarning] = []
+        properties = ["Name", "DisplayName", "State", "StartMode", "Status", "Started"]
+        if details:
+            properties += [
+                "PathName",
+                "StartName",
+                "Description",
+                "ProcessId",
+                "DelayedAutoStart",
+                "ServiceType",
+                "ExitCode",
+                "ServiceSpecificExitCode",
+            ]
+        rows, ok = await self._query("Win32_Service", properties, warnings, limit=1000)
+        if not ok:
+            raise InspectionError("InspectionUnavailable")
+        services = [self._service_entry(row, details) for row in rows]
+        services.sort(
+            key=lambda item: (
+                item.current_state.state != "Running",
+                (item.identity.display_name or item.identity.name).casefold(),
+            )
+        )
+        return ServicesInspection(services=services, warnings=warnings)
+
+    @staticmethod
+    def _service_entry(row: dict[str, JsonValue], details: bool) -> ServiceEntry:
+        name = _clean(row.get("Name"))
+        if name is None:
+            raise InspectionError("InvalidToolOutput")
+        return ServiceEntry(
+            identity=ServiceIdentity(
+                name=name,
+                display_name=_clean(row.get("DisplayName")),
+            ),
+            configuration=ServiceConfiguration(
+                startup_type=_clean(row.get("StartMode")),
+            ),
+            current_state=ServiceState(
+                state=_clean(row.get("State")),
+                started=_boolean(row.get("Started")),
+            ),
+            health_status=_clean(row.get("Status")),
+            details=(
+                ServiceDetails(
+                    binary_path=_clean(row.get("PathName")),
+                    service_account=_clean(row.get("StartName")),
+                    description=_clean(row.get("Description")),
+                    pid=_integer(row.get("ProcessId")),
+                    delayed_auto_start=_boolean(row.get("DelayedAutoStart")),
+                    service_type=_clean(row.get("ServiceType")),
+                    exit_code=_integer(row.get("ExitCode")),
+                    service_specific_exit_code=_integer(
+                        row.get("ServiceSpecificExitCode")
+                    ),
+                )
+                if details
+                else None
+            ),
+        )
 
     def _network_adapter(
         self,

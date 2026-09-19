@@ -8,6 +8,8 @@ from sys_eden.inspection_models import (
     GpuInspection,
     MemoryInspection,
     NetworkInspection,
+    ProcessesInspection,
+    ServicesInspection,
     StorageInspection,
     SystemInspection,
 )
@@ -99,6 +101,8 @@ def _footer(
         | GpuInspection
         | StorageInspection
         | NetworkInspection
+        | ProcessesInspection
+        | ServicesInspection
     ),
 ) -> list[str]:
     lines: list[str] = []
@@ -532,6 +536,78 @@ def _network(data: NetworkInspection) -> list[str]:
     return lines + _footer(data)
 
 
+def _processes(data: ProcessesInspection) -> list[str]:
+    lines = [
+        "Processes",
+        "Summary",
+        f"  Detected: {data.total_detected}",
+        f"  Shown: {data.returned_count}",
+        "Current state",
+    ]
+    for process in data.processes:
+        state = process.current_state
+        lines.append(
+            "  "
+            f"PID {process.identity.pid} | {_text(process.identity.name)} | "
+            f"CPU {format_percent(state.cpu_percent)} | "
+            f"RAM {format_bytes(state.memory_bytes)} | "
+            f"user {_text(state.user)} | {_text(state.status)}"
+        )
+        if process.details:
+            item = process.details
+            lines += _section(
+                f"PID {process.identity.pid} - Details",
+                [
+                    ("Executable path", _text(item.executable_path)),
+                    ("Command line", _text(item.command_line)),
+                    ("Parent PID", _text(item.parent_pid)),
+                    ("Start time", format_timestamp(item.start_time)),
+                    ("Threads", _text(item.thread_count)),
+                    ("Handles", _text(item.handle_count)),
+                    ("I/O read", format_throughput(item.io_read_bytes_per_second)),
+                    ("I/O write", format_throughput(item.io_write_bytes_per_second)),
+                    ("Architecture", _text(item.architecture)),
+                    ("Publisher", _text(item.publisher)),
+                    ("Digitally signed", _text(item.digitally_signed)),
+                ],
+            )
+    return lines + _footer(data)
+
+
+def _services(data: ServicesInspection) -> list[str]:
+    lines = ["Services", "Current state"]
+    for service in data.services:
+        identity = service.identity
+        state = service.current_state
+        lines.append(
+            "  "
+            f"{_text(identity.display_name)} ({identity.name}) | "
+            f"{_text(state.state)} | startup {_text(service.configuration.startup_type)} | "
+            f"status {_text(service.health_status)}"
+        )
+        if service.details:
+            item = service.details
+            lines += _section(
+                f"{identity.name} - Details",
+                [
+                    ("Binary path", _text(item.binary_path)),
+                    ("Service account", _text(item.service_account)),
+                    ("Description", _text(item.description)),
+                    ("PID", _text(item.pid)),
+                    ("Dependencies", ", ".join(item.dependencies) or UNAVAILABLE),
+                    (
+                        "Dependent services",
+                        ", ".join(item.dependent_services) or UNAVAILABLE,
+                    ),
+                    ("Delayed auto start", _text(item.delayed_auto_start)),
+                    ("Service type", _text(item.service_type)),
+                    ("Exit code", _text(item.exit_code)),
+                    ("Service-specific exit code", _text(item.service_specific_exit_code)),
+                ],
+            )
+    return lines + _footer(data)
+
+
 def render_human(result: InspectionResult) -> str:
     if not result.success or result.data is None:
         return f"{result.capability.title()}\nError: {result.error or 'unknown'}"
@@ -545,6 +621,10 @@ def render_human(result: InspectionResult) -> str:
         lines = _gpu(result.data)
     elif isinstance(result.data, StorageInspection):
         lines = _storage(result.data)
-    else:
+    elif isinstance(result.data, NetworkInspection):
         lines = _network(result.data)
+    elif isinstance(result.data, ProcessesInspection):
+        lines = _processes(result.data)
+    else:
+        lines = _services(result.data)
     return "\n".join(lines)
