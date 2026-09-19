@@ -42,5 +42,9 @@ uv run eden inspect ram
 These return timestamped JSON results using a fixed Windows PowerShell CIM reader
 in the current user's context. Requests are passed as JSON, with a 20-second
 timeout and cancellation cleanup. Nothing is sent to a model or external service.
+RAM inspection reports each module's manufacturer, model, part number (often the
+most useful Windows/SMBIOS model identifier), physical slot, bank, capacity, current
+and configured speed, form factor, and SMBIOS memory type. Firmware may leave
+some identity fields blank or return generic values.
 The initial generic CIM interface supports the three reviewed provider classes;
 the remaining collectors and generic readers are unfinished Milestone 2 work.

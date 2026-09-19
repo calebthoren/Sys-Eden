@@ -26,6 +26,27 @@ async def test_collector_uses_structured_query():
 
 
 @pytest.mark.asyncio
+async def test_ram_collector_requests_module_identity_and_location():
+    class Reader:
+        async def query(self, request: CimQuery) -> list[dict[str, JsonValue]]:
+            assert request.class_name == "Win32_PhysicalMemory"
+            assert {"Manufacturer", "Model", "PartNumber", "DeviceLocator", "BankLabel"} <= set(
+                request.properties
+            )
+            return [
+                {
+                    "Manufacturer": "Fixture Memory",
+                    "PartNumber": "FM-16G-6000",
+                    "DeviceLocator": "DIMM_A2",
+                }
+            ]
+
+    result = await collect("ram", Reader())
+    assert result.success
+    assert result.data[0]["PartNumber"] == "FM-16G-6000"
+
+
+@pytest.mark.asyncio
 async def test_collector_reports_failure_without_claiming_empty_success():
     class Reader:
         async def query(self, request: CimQuery) -> list[dict[str, JsonValue]]:

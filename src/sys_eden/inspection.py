@@ -47,7 +47,18 @@ QUERIES = {
     ),
     "ram": CimQuery(
         class_name="Win32_PhysicalMemory",
-        properties=["Capacity", "Speed", "ConfiguredClockSpeed"],
+        properties=[
+            "Manufacturer",
+            "Model",
+            "PartNumber",
+            "DeviceLocator",
+            "BankLabel",
+            "Capacity",
+            "Speed",
+            "ConfiguredClockSpeed",
+            "FormFactor",
+            "SMBIOSMemoryType",
+        ],
     ),
 }
 
