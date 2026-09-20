@@ -379,6 +379,12 @@ def _gpu(data: GpuInspection) -> list[str]:
                     ("Driver INF", _text(item.driver_inf)),
                     ("Driver signed", _text(item.driver_signed)),
                     ("Video processor", _text(item.video_processor)),
+                    ("VRAM capacity source", _text(item.dedicated_vram_source)),
+                    (
+                        "Shared system memory limit",
+                        format_bytes(item.shared_system_memory_bytes),
+                    ),
+                    ("DXGI adapter LUID", _text(item.adapter_luid)),
                     ("Current clock", format_frequency(item.current_clock_mhz)),
                     ("VRAM used", format_bytes(item.vram_used_bytes)),
                     (
@@ -428,7 +434,7 @@ def _storage(data: StorageInspection) -> list[str]:
                     ("Firmware version", _text(item.firmware_version)),
                     ("Partition style", _text(item.partition_style)),
                     ("Device ID", _text(item.device_id)),
-                    ("TRIM enabled", _text(item.trim_enabled)),
+                    ("Per-device TRIM support", _text(item.trim_enabled)),
                     (
                         "Temperature",
                         UNAVAILABLE
@@ -437,6 +443,8 @@ def _storage(data: StorageInspection) -> list[str]:
                     ),
                     ("Read errors", _text(item.read_errors)),
                     ("Write errors", _text(item.write_errors)),
+                    ("Wear", format_percent(item.wear_percent)),
+                    ("Power-on hours", _text(item.power_on_hours)),
                 ],
             )
     if not data.volumes:
@@ -477,8 +485,24 @@ def _storage(data: StorageInspection) -> list[str]:
                 [
                     ("Path", _text(volume.details.path)),
                     ("Encryption", _text(volume.details.encryption_status)),
+                    (
+                        "Encryption protection",
+                        _text(volume.details.encryption_protection),
+                    ),
+                    ("Encryption method", _text(volume.details.encryption_method)),
                 ],
             )
+    if data.trim_configuration:
+        lines += _section(
+            "Filesystem delete-notification configuration",
+            [
+                (
+                    item.filesystem,
+                    _text(item.delete_notifications_enabled),
+                )
+                for item in data.trim_configuration
+            ],
+        )
     return lines + _footer(data)
 
 
@@ -545,6 +569,12 @@ def _network(data: NetworkInspection) -> list[str]:
                     ("Send errors", _text(item.send_errors)),
                     ("Receive discards", _text(item.receive_discards)),
                     ("Send discards", _text(item.send_discards)),
+                    (
+                        "Throughput sample",
+                        UNAVAILABLE
+                        if item.throughput_sample_seconds is None
+                        else f"{item.throughput_sample_seconds:.2f} s (derived rate)",
+                    ),
                 ],
             )
             for route_index, route in enumerate(item.routes, start=1):

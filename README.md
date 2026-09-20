@@ -66,22 +66,32 @@ numbers are queried only with `--details`, and known placeholder serials are sho
 as unavailable. Firmware or drivers may leave other values blank or generic.
 
 System, CPU, RAM, GPU, storage, and network use the shared typed
-model/collector/formatter architecture. GPU fields that standard Windows CIM
-cannot attribute reliably (modern dedicated VRAM, utilization, temperature,
-clocks, and power) remain unavailable. Storage exposes standard health and
-operational status; SMART temperature/error counters, TRIM, and encryption state
-remain unavailable until a reliable read provider is added.
+model/collector/formatter architecture. GPU capacity uses DXGI rather than the
+32-bit `Win32_VideoController.AdapterRAM` field, with installed NVIDIA driver
+inventory as a capacity fallback/override and an explicit source label. GPU
+utilization, temperature, clocks, VRAM use, and power remain unavailable pending
+a later cross-vendor telemetry design.
+
+Storage exposes standard health and operational status plus detailed filesystem
+delete-notification configuration. The latter is not proof of per-device TRIM
+support. Storage reliability counters and BitLocker state are unavailable to the
+normal-user providers on the development machine; typed provider boundaries are
+reserved for the planned System Service.
+
 Network inspection uses local adapter/configuration/route data and performs no
-external public-IP lookup. Standard CIM does not reliably expose Wi-Fi SSID and
-signal or live per-adapter throughput on every system, so those fields may be
-unavailable.
+external public-IP lookup. A short sample of Windows adapter counters produces
+derived receive/send throughput, while details include direct cumulative
+error/discard counters and the sample duration. The location-independent Native
+Wi-Fi quality API supplies signal and link rates when supported. SSID remains
+unavailable when Windows location consent is disabled; Eden does not change that
+privacy setting.
 Process inspection ranks the 20 most resource-relevant processes by normalized
 CPU and private memory in normal output; `--details` expands to 100 and adds
 available paths, command lines, parent/start/thread/handle information, and I/O.
 Protected fields and process owners may be unavailable. Service inspection keeps
 normal rows compact while `--details` adds paths, accounts, descriptions, PIDs,
-startup behavior, service types, and exit codes. Dependency relationships are
-reserved in the schema but unavailable from the current generic reader.
+startup behavior, service types, exit codes, dependencies, and dependent
+services.
 Startup inspection reports registered startup commands but leaves enablement,
 publisher/signature, and impact unavailable where Win32 does not expose them.
 Driver inventory correlates signed-driver records with Plug and Play device
@@ -102,3 +112,5 @@ bounded generic CIM and Event Log readers and a side-effect-free registry
 inventory reader. It runs as the current user and performs no mutation or
 administrator-level AI execution. Values that need a more reliable provider,
 extra permission, or vendor telemetry remain explicitly unavailable.
+See the [read-only inspection capability audit](docs/Sys_Eden_inspection_capability_audit_v1.0.md)
+for provider, permission, live-result, and deferral decisions.

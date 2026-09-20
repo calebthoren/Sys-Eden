@@ -13,8 +13,15 @@ from sys_eden.inspection import (
     EventLogReader,
     EventProviderName,
     EventQuery,
+    GraphicsInventoryReader,
     InspectionError,
+    NetworkStatisticsReader,
+    ServiceDependencyReader,
     SoftwareInventoryReader,
+    StorageReliabilityReader,
+    StorageTrimReader,
+    VolumeEncryptionReader,
+    WifiQualityReader,
 )
 from sys_eden.inspection_models import (
     BootEvidence,
@@ -38,6 +45,7 @@ from sys_eden.inspection_models import (
     EventDetails,
     EventRecord,
     EventsInspection,
+    FilesystemTrimConfiguration,
     GpuAdapter,
     GpuConfiguration,
     GpuDetails,
@@ -262,10 +270,24 @@ class WindowsInspectionProvider:
         reader: CimReader,
         software_reader: SoftwareInventoryReader | None = None,
         event_reader: EventLogReader | None = None,
+        graphics_reader: GraphicsInventoryReader | None = None,
+        service_dependency_reader: ServiceDependencyReader | None = None,
+        network_statistics_reader: NetworkStatisticsReader | None = None,
+        wifi_quality_reader: WifiQualityReader | None = None,
+        storage_reliability_reader: StorageReliabilityReader | None = None,
+        storage_trim_reader: StorageTrimReader | None = None,
+        volume_encryption_reader: VolumeEncryptionReader | None = None,
     ):
         self._reader = reader
         self._software_reader = software_reader
         self._event_reader = event_reader
+        self._graphics_reader = graphics_reader
+        self._service_dependency_reader = service_dependency_reader
+        self._network_statistics_reader = network_statistics_reader
+        self._wifi_quality_reader = wifi_quality_reader
+        self._storage_reliability_reader = storage_reliability_reader
+        self._storage_trim_reader = storage_trim_reader
+        self._volume_encryption_reader = volume_encryption_reader
 
     async def _query(
         self,
@@ -661,6 +683,14 @@ class WindowsInspectionProvider:
         graphics, ok = await self._query("Win32_VideoController", properties, warnings)
         if not ok:
             raise InspectionError("InspectionUnavailable")
+        dxgi_adapters: list[dict[str, JsonValue]] = []
+        if self._graphics_reader is not None:
+            try:
+                dxgi_adapters = await self._graphics_reader.graphics_adapters()
+            except InspectionError as error:
+                warnings.append(
+                    SourceWarning(source="DXGI adapter inventory", code=error.code)
+                )
         drivers: list[dict[str, JsonValue]] = []
         if details:
             drivers, _ = await self._query(
@@ -691,7 +721,13 @@ class WindowsInspectionProvider:
                 )
             )
         adapters = [
-            self._gpu_adapter(row, drivers, details, row is unique_primary)
+            self._gpu_adapter(
+                row,
+                drivers,
+                dxgi_adapters,
+                details,
+                row is unique_primary,
+            )
             for row in graphics
         ]
         return GpuInspection(
@@ -704,6 +740,7 @@ class WindowsInspectionProvider:
         self,
         row: dict[str, JsonValue],
         drivers: list[dict[str, JsonValue]],
+        dxgi_adapters: list[dict[str, JsonValue]],
         details: bool,
         primary: bool,
     ) -> GpuAdapter:
@@ -721,6 +758,7 @@ class WindowsInspectionProvider:
         height = _integer(row.get("CurrentVerticalResolution"))
         resolution = f"{width}x{height}" if width and height else None
         active = self._gpu_active(row)
+        dxgi = self._matching_dxgi_adapter(row, dxgi_adapters)
         return GpuAdapter(
             identity=GpuIdentity(
                 name=_clean(row.get("Name")),
@@ -734,8 +772,7 @@ class WindowsInspectionProvider:
                 ),
             ),
             configuration=GpuConfiguration(
-                # AdapterRAM is a 32-bit WMI field and is unreliable for modern GPUs.
-                dedicated_vram_bytes=None,
+                dedicated_vram_bytes=_integer(dxgi.get("DedicatedVideoMemory")),
                 driver_version=_clean(row.get("DriverVersion")),
                 driver_date=self._calendar_date(row.get("DriverDate")),
             ),
@@ -757,12 +794,40 @@ class WindowsInspectionProvider:
                     driver_inf=_clean(driver.get("InfName")),
                     driver_signed=_boolean(driver.get("IsSigned")),
                     video_processor=_clean(row.get("VideoProcessor")),
+                    dedicated_vram_source=_clean(dxgi.get("CapacitySource")),
+                    shared_system_memory_bytes=_integer(dxgi.get("SharedSystemMemory")),
+                    adapter_luid=_clean(dxgi.get("AdapterLuid")),
                     display_resolution=resolution,
                     display_refresh_hz=_integer(row.get("CurrentRefreshRate")),
                 )
                 if details
                 else None
             ),
+        )
+
+    @staticmethod
+    def _matching_dxgi_adapter(
+        row: dict[str, JsonValue], adapters: list[dict[str, JsonValue]]
+    ) -> dict[str, JsonValue]:
+        pnp_id = (_clean(row.get("PNPDeviceID")) or "").upper()
+        vendor_match = re.search(r"VEN_([0-9A-F]{4})", pnp_id)
+        device_match = re.search(r"DEV_([0-9A-F]{4})", pnp_id)
+        if vendor_match and device_match:
+            vendor_id = int(vendor_match.group(1), 16)
+            device_id = int(device_match.group(1), 16)
+            for adapter in adapters:
+                if _integer(adapter.get("VendorId")) == vendor_id and _integer(
+                    adapter.get("DeviceId")
+                ) == device_id:
+                    return adapter
+        name = (_clean(row.get("Name")) or "").casefold()
+        return next(
+            (
+                adapter
+                for adapter in adapters
+                if (_clean(adapter.get("Name")) or "").casefold() == name
+            ),
+            {},
         )
 
     async def storage(self, *, details: bool) -> StorageInspection:
@@ -802,6 +867,9 @@ class WindowsInspectionProvider:
         if not physical_ok and not volume_ok:
             raise InspectionError("InspectionUnavailable")
         disk_rows: list[dict[str, JsonValue]] = []
+        reliability_rows: list[dict[str, JsonValue]] = []
+        encryption_rows: list[dict[str, JsonValue]] = []
+        trim_rows: list[dict[str, JsonValue]] = []
         if details:
             disk_rows, _ = await self._query(
                 "MSFT_Disk",
@@ -809,14 +877,66 @@ class WindowsInspectionProvider:
                 warnings,
                 namespace=namespace,
             )
+            if self._storage_reliability_reader is not None:
+                try:
+                    reliability_rows = (
+                        await self._storage_reliability_reader.storage_reliability()
+                    )
+                except InspectionError as error:
+                    warnings.append(
+                        SourceWarning(
+                            source="Storage reliability counters", code=error.code
+                        )
+                    )
+            if self._volume_encryption_reader is not None:
+                try:
+                    encryption_rows = (
+                        await self._volume_encryption_reader.volume_encryption()
+                    )
+                except InspectionError as error:
+                    warnings.append(
+                        SourceWarning(source="Volume encryption", code=error.code)
+                    )
+            if self._storage_trim_reader is not None:
+                try:
+                    trim_rows = await self._storage_trim_reader.trim_configuration()
+                except InspectionError as error:
+                    warnings.append(
+                        SourceWarning(
+                            source="Filesystem delete notifications", code=error.code
+                        )
+                    )
         physical_disks = [
-            self._physical_disk(row, disk_rows, details) for row in physical_rows
+            self._physical_disk(
+                row,
+                disk_rows,
+                self._matching_storage_reliability(row, reliability_rows),
+                details,
+            )
+            for row in physical_rows
         ]
-        volumes = [self._storage_volume(row, details) for row in volume_rows]
+        volumes = [
+            self._storage_volume(
+                row,
+                self._matching_volume_encryption(row, encryption_rows),
+                details,
+            )
+            for row in volume_rows
+        ]
+        trim_configuration = [
+            FilesystemTrimConfiguration(
+                filesystem=_clean(row.get("FileSystem")) or "unknown",
+                delete_notifications_enabled=_boolean(
+                    row.get("DeleteNotificationsEnabled")
+                ),
+            )
+            for row in trim_rows
+        ]
         observations = self._storage_observations(physical_disks, volumes)
         return StorageInspection(
             physical_disks=physical_disks,
             volumes=volumes,
+            trim_configuration=trim_configuration,
             observations=observations,
             warnings=warnings,
         )
@@ -878,6 +998,22 @@ class WindowsInspectionProvider:
         ]
         drivers: list[dict[str, JsonValue]] = []
         routes: list[dict[str, JsonValue]] = []
+        statistics: list[dict[str, JsonValue]] = []
+        wifi_quality: list[dict[str, JsonValue]] = []
+        if self._network_statistics_reader is not None:
+            try:
+                statistics = await self._network_statistics_reader.network_statistics()
+            except InspectionError as error:
+                warnings.append(
+                    SourceWarning(source="Network adapter statistics", code=error.code)
+                )
+        if self._wifi_quality_reader is not None:
+            try:
+                wifi_quality = await self._wifi_quality_reader.wifi_quality()
+            except InspectionError as error:
+                warnings.append(
+                    SourceWarning(source="Native Wi-Fi quality", code=error.code)
+                )
         if details:
             drivers, _ = await self._query(
                 "Win32_PnPSignedDriver",
@@ -897,6 +1033,8 @@ class WindowsInspectionProvider:
                 configs.get(_integer(row.get("Index")), {}),
                 drivers,
                 routes,
+                self._matching_network_statistics(row, statistics),
+                self._matching_wifi_quality(row, wifi_quality),
                 details,
             )
             for row in relevant
@@ -1053,7 +1191,31 @@ class WindowsInspectionProvider:
         rows, ok = await self._query("Win32_Service", properties, warnings, limit=1000)
         if not ok:
             raise InspectionError("InspectionUnavailable")
-        services = [self._service_entry(row, details) for row in rows]
+        dependencies: dict[str, set[str]] = {}
+        dependents: dict[str, set[str]] = {}
+        if details and self._service_dependency_reader is not None:
+            try:
+                relations = await self._service_dependency_reader.service_dependencies()
+                for relation in relations:
+                    antecedent = _clean(relation.get("Antecedent"))
+                    dependent = _clean(relation.get("Dependent"))
+                    if antecedent is None or dependent is None:
+                        continue
+                    dependencies.setdefault(dependent.casefold(), set()).add(antecedent)
+                    dependents.setdefault(antecedent.casefold(), set()).add(dependent)
+            except InspectionError as error:
+                warnings.append(
+                    SourceWarning(source="Service dependency inventory", code=error.code)
+                )
+        services = [
+            self._service_entry(
+                row,
+                details,
+                dependencies.get((_clean(row.get("Name")) or "").casefold(), set()),
+                dependents.get((_clean(row.get("Name")) or "").casefold(), set()),
+            )
+            for row in rows
+        ]
         services.sort(
             key=lambda item: (
                 item.current_state.state != "Running",
@@ -1522,7 +1684,12 @@ class WindowsInspectionProvider:
         )
 
     @staticmethod
-    def _service_entry(row: dict[str, JsonValue], details: bool) -> ServiceEntry:
+    def _service_entry(
+        row: dict[str, JsonValue],
+        details: bool,
+        dependencies: set[str],
+        dependent_services: set[str],
+    ) -> ServiceEntry:
         name = _clean(row.get("Name"))
         if name is None:
             raise InspectionError("InvalidToolOutput")
@@ -1545,6 +1712,8 @@ class WindowsInspectionProvider:
                     service_account=_clean(row.get("StartName")),
                     description=_clean(row.get("Description")),
                     pid=_integer(row.get("ProcessId")),
+                    dependencies=sorted(dependencies, key=str.casefold),
+                    dependent_services=sorted(dependent_services, key=str.casefold),
                     delayed_auto_start=_boolean(row.get("DelayedAutoStart")),
                     service_type=_clean(row.get("ServiceType")),
                     exit_code=_integer(row.get("ExitCode")),
@@ -1563,6 +1732,8 @@ class WindowsInspectionProvider:
         config: dict[str, JsonValue],
         drivers: list[dict[str, JsonValue]],
         routes: list[dict[str, JsonValue]],
+        statistics: dict[str, JsonValue],
+        wifi_quality: dict[str, JsonValue],
         details: bool,
     ) -> NetworkAdapter:
         addresses = self._strings(config.get("IPAddress"))
@@ -1610,6 +1781,20 @@ class WindowsInspectionProvider:
                 ipv6_addresses=ipv6_addresses,
                 default_gateways=self._strings(config.get("DefaultIPGateway")),
                 dns_servers=self._strings(config.get("DNSServerSearchOrder")),
+                receive_bytes_per_second=_integer(
+                    statistics.get("ReceiveBytesPerSecond")
+                ),
+                send_bytes_per_second=_integer(statistics.get("SendBytesPerSecond")),
+                throughput_measurement=("derived" if statistics else None),
+                wifi_signal_percent=_number(wifi_quality.get("SignalQuality")),
+                wifi_receive_link_speed_bps=(
+                    (_integer(wifi_quality.get("ReceiveRateKbps")) or 0) * 1000
+                    or None
+                ),
+                wifi_transmit_link_speed_bps=(
+                    (_integer(wifi_quality.get("TransmitRateKbps")) or 0) * 1000
+                    or None
+                ),
             ),
             health_status=_clean(row.get("Status")),
             details=(
@@ -1629,10 +1814,64 @@ class WindowsInspectionProvider:
                     interface_index=interface_index,
                     interface_guid=_clean(row.get("GUID")),
                     routes=matching_routes,
+                    receive_errors=_integer(statistics.get("ReceivedPacketErrors")),
+                    send_errors=_integer(statistics.get("OutboundPacketErrors")),
+                    receive_discards=_integer(
+                        statistics.get("ReceivedDiscardedPackets")
+                    ),
+                    send_discards=_integer(
+                        statistics.get("OutboundDiscardedPackets")
+                    ),
+                    throughput_sample_seconds=_number(statistics.get("SampleSeconds")),
                 )
                 if details
                 else None
             ),
+        )
+
+    @staticmethod
+    def _matching_network_statistics(
+        adapter: dict[str, JsonValue], rows: list[dict[str, JsonValue]]
+    ) -> dict[str, JsonValue]:
+        names = {
+            value.casefold()
+            for field in ("NetConnectionID", "Name", "Description")
+            if (value := _clean(adapter.get(field))) is not None
+        }
+        return next(
+            (
+                row
+                for row in rows
+                if any(
+                    (candidate := _clean(row.get(field))) is not None
+                    and candidate.casefold() in names
+                    for field in ("Name", "InterfaceDescription")
+                )
+            ),
+            {},
+        )
+
+    @staticmethod
+    def _matching_wifi_quality(
+        adapter: dict[str, JsonValue], rows: list[dict[str, JsonValue]]
+    ) -> dict[str, JsonValue]:
+        guid = (_clean(adapter.get("GUID")) or "").casefold()
+        description = (_clean(adapter.get("Description")) or "").casefold()
+        return next(
+            (
+                row
+                for row in rows
+                if (
+                    guid
+                    and (_clean(row.get("InterfaceGuid")) or "").casefold() == guid
+                )
+                or (
+                    description
+                    and (_clean(row.get("InterfaceDescription")) or "").casefold()
+                    == description
+                )
+            ),
+            {},
         )
 
     @staticmethod
@@ -1666,6 +1905,7 @@ class WindowsInspectionProvider:
         self,
         row: dict[str, JsonValue],
         disks: list[dict[str, JsonValue]],
+        reliability: dict[str, JsonValue],
         details: bool,
     ) -> PhysicalDisk:
         number = _integer(row.get("DeviceId"))
@@ -1702,6 +1942,11 @@ class WindowsInspectionProvider:
                         else None
                     ),
                     device_id=_clean(row.get("DeviceId")),
+                    temperature_celsius=_number(reliability.get("Temperature")),
+                    read_errors=_integer(reliability.get("ReadErrorsTotal")),
+                    write_errors=_integer(reliability.get("WriteErrorsTotal")),
+                    wear_percent=_number(reliability.get("Wear")),
+                    power_on_hours=_integer(reliability.get("PowerOnHours")),
                 )
                 if details
                 else None
@@ -1709,7 +1954,10 @@ class WindowsInspectionProvider:
         )
 
     def _storage_volume(
-        self, row: dict[str, JsonValue], details: bool
+        self,
+        row: dict[str, JsonValue],
+        encryption: dict[str, JsonValue],
+        details: bool,
     ) -> StorageVolume:
         total = _integer(row.get("Size"))
         free = _integer(row.get("SizeRemaining"))
@@ -1737,7 +1985,61 @@ class WindowsInspectionProvider:
                 _HEALTH_STATUSES.get(health_code) if health_code is not None else None
             ),
             operational_status=self._status_list(row.get("OperationalStatus")),
-            details=(VolumeDetails(path=_clean(row.get("Path"))) if details else None),
+            details=(
+                VolumeDetails(
+                    path=_clean(row.get("Path")),
+                    encryption_status=_clean(encryption.get("VolumeStatus")),
+                    encryption_protection=_clean(encryption.get("ProtectionStatus")),
+                    encryption_method=_clean(encryption.get("EncryptionMethod")),
+                )
+                if details
+                else None
+            ),
+        )
+
+    @staticmethod
+    def _matching_storage_reliability(
+        disk: dict[str, JsonValue], rows: list[dict[str, JsonValue]]
+    ) -> dict[str, JsonValue]:
+        number = _integer(disk.get("DeviceId"))
+        model = (_clean(disk.get("FriendlyName")) or "").casefold()
+        return next(
+            (
+                row
+                for row in rows
+                if _integer(row.get("DeviceId")) == number
+                or (
+                    model
+                    and (_clean(row.get("FriendlyName")) or "").casefold() == model
+                )
+            ),
+            {},
+        )
+
+    @staticmethod
+    def _matching_volume_encryption(
+        volume: dict[str, JsonValue], rows: list[dict[str, JsonValue]]
+    ) -> dict[str, JsonValue]:
+        drive = (_clean(volume.get("DriveLetter")) or "").rstrip(":").casefold()
+        path = (_clean(volume.get("Path")) or "").rstrip("\\").casefold()
+        return next(
+            (
+                row
+                for row in rows
+                if (
+                    drive
+                    and (_clean(row.get("DriveLetter")) or "")
+                    .rstrip(":")
+                    .casefold()
+                    == drive
+                )
+                or (
+                    path
+                    and (_clean(row.get("Path")) or "").rstrip("\\").casefold()
+                    == path
+                )
+            ),
+            {},
         )
 
     @staticmethod

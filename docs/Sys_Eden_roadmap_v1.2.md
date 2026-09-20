@@ -36,6 +36,17 @@ and does not grant a model administrator execution. Validation covers 46 tests,
 Ruff, Pyright, live collector smoke tests, and a structured all-component
 snapshot. Milestone 3, structured reports and knowledge history, is next; its
 implementation has not started.
+
+A focused post-acceptance inspection capability audit completed on 2026-09-19.
+It replaced the 32-bit video-controller memory field with DXGI plus a fixed
+installed-vendor inventory fallback, added direct service dependencies,
+filesystem delete-notification configuration, sampled adapter throughput and
+error counters, and location-independent Wi-Fi quality. Storage reliability and
+BitLocker providers were denied to the current user and remain behind typed
+interfaces for the planned System Service. Location-sensitive SSID access remains
+subject to Windows location consent. Milestone 3 remains unstarted pending the
+explicit instruction to continue. The audit implementation is validated by 57
+tests, Ruff, Pyright, and live normal-user inspection smoke checks.
 The repository retains the initial `src/sys_eden/` package spelling.
 
 

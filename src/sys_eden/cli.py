@@ -82,6 +82,11 @@ def inspect(
             reader,
             software_reader=reader,
             event_reader=reader,
+            graphics_reader=reader,
+            service_dependency_reader=reader,
+            network_statistics_reader=reader,
+            wifi_quality_reader=reader,
+            storage_trim_reader=reader,
         )
         names = supported if component == "all" else (component,)
         return [await collect(name, provider, details=details) for name in names]

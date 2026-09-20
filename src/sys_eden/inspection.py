@@ -74,6 +74,34 @@ class CimReader(Protocol):
     async def query(self, request: CimQuery) -> list[dict[str, JsonValue]]: ...
 
 
+class GraphicsInventoryReader(Protocol):
+    async def graphics_adapters(self) -> list[dict[str, JsonValue]]: ...
+
+
+class ServiceDependencyReader(Protocol):
+    async def service_dependencies(self) -> list[dict[str, JsonValue]]: ...
+
+
+class NetworkStatisticsReader(Protocol):
+    async def network_statistics(self) -> list[dict[str, JsonValue]]: ...
+
+
+class WifiQualityReader(Protocol):
+    async def wifi_quality(self) -> list[dict[str, JsonValue]]: ...
+
+
+class StorageReliabilityReader(Protocol):
+    async def storage_reliability(self) -> list[dict[str, JsonValue]]: ...
+
+
+class StorageTrimReader(Protocol):
+    async def trim_configuration(self) -> list[dict[str, JsonValue]]: ...
+
+
+class VolumeEncryptionReader(Protocol):
+    async def volume_encryption(self) -> list[dict[str, JsonValue]]: ...
+
+
 class SoftwareInventoryReader(Protocol):
     async def installed_software(self) -> list[dict[str, JsonValue]]: ...
 

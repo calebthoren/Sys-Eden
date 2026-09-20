@@ -379,6 +379,90 @@ class FixtureReader:
             }
         ]
 
+    async def graphics_adapters(self) -> list[dict[str, JsonValue]]:
+        return [
+            {
+                "Name": "Fixture GPU",
+                "VendorId": 0x1234,
+                "DeviceId": 0x5678,
+                "DedicatedVideoMemory": 12 * 1024**3,
+                "SharedSystemMemory": 16 * 1024**3,
+                "AdapterLuid": "0000000000000001",
+                "CapacitySource": "DXGI",
+            }
+        ]
+
+    async def service_dependencies(self) -> list[dict[str, JsonValue]]:
+        return [
+            {
+                "Antecedent": "RpcSs",
+                "Dependent": "FixtureService",
+                "TypeOfDependency": 3,
+            },
+            {
+                "Antecedent": "FixtureService",
+                "Dependent": "DependentFixture",
+                "TypeOfDependency": 3,
+            },
+        ]
+
+    async def storage_reliability(self) -> list[dict[str, JsonValue]]:
+        return [
+            {
+                "DeviceId": 0,
+                "FriendlyName": "Fixture NVMe",
+                "Temperature": 39,
+                "ReadErrorsTotal": 2,
+                "WriteErrorsTotal": 1,
+                "Wear": 4,
+                "PowerOnHours": 1200,
+            }
+        ]
+
+    async def volume_encryption(self) -> list[dict[str, JsonValue]]:
+        return [
+            {
+                "DriveLetter": "C:",
+                "VolumeStatus": "FullyEncrypted",
+                "ProtectionStatus": "On",
+                "EncryptionMethod": "XTS-AES 256",
+            }
+        ]
+
+    async def trim_configuration(self) -> list[dict[str, JsonValue]]:
+        return [
+            {
+                "FileSystem": "NTFS",
+                "DeleteNotificationsEnabled": True,
+            }
+        ]
+
+    async def network_statistics(self) -> list[dict[str, JsonValue]]:
+        return [
+            {
+                "Name": "Ethernet",
+                "InterfaceDescription": "Fixture 2.5GbE Adapter",
+                "ReceiveBytesPerSecond": 4096,
+                "SendBytesPerSecond": 1024,
+                "SampleSeconds": 0.5,
+                "ReceivedPacketErrors": 2,
+                "OutboundPacketErrors": 1,
+                "ReceivedDiscardedPackets": 4,
+                "OutboundDiscardedPackets": 3,
+            }
+        ]
+
+    async def wifi_quality(self) -> list[dict[str, JsonValue]]:
+        return [
+            {
+                "InterfaceGuid": "{fixture-guid}",
+                "InterfaceDescription": "Fixture 2.5GbE Adapter",
+                "SignalQuality": 82,
+                "ReceiveRateKbps": 866000,
+                "TransmitRateKbps": 780000,
+            }
+        ]
+
     async def query_events(self, request: EventQuery) -> list[dict[str, JsonValue]]:
         if request.log_names == ["Application"]:
             return [
@@ -563,13 +647,14 @@ async def test_ram_default_omits_serial_and_details_decode_inventory():
 
 @pytest.mark.asyncio
 async def test_gpu_keeps_unreliable_telemetry_unavailable_and_adds_driver_details():
-    provider = WindowsInspectionProvider(FixtureReader())
+    reader = FixtureReader()
+    provider = WindowsInspectionProvider(reader, graphics_reader=reader)
     basic = await provider.gpu(details=False)
     assert len(basic.adapters) == 1
     adapter = basic.adapters[0]
     assert adapter.identity.name == "Fixture GPU"
     assert adapter.identity.adapter_type == "hardware"
-    assert adapter.configuration.dedicated_vram_bytes is None
+    assert adapter.configuration.dedicated_vram_bytes == 12 * 1024**3
     assert adapter.current_state.utilization_percent is None
     assert adapter.current_state.primary
     assert adapter.details is None
@@ -579,11 +664,53 @@ async def test_gpu_keeps_unreliable_telemetry_unavailable_and_adds_driver_detail
     assert detailed.adapters[0].details.driver_provider == "Fixture Driver Provider"
     assert detailed.adapters[0].details.driver_inf == "fixture.inf"
     assert detailed.adapters[0].details.display_resolution == "2560x1440"
+    assert detailed.adapters[0].details.dedicated_vram_source == "DXGI"
+    assert detailed.adapters[0].details.shared_system_memory_bytes == 16 * 1024**3
+
+
+@pytest.mark.asyncio
+async def test_gpu_preserves_unavailable_vram_when_dxgi_provider_fails():
+    class FailedGraphicsReader:
+        async def graphics_adapters(self) -> list[dict[str, JsonValue]]:
+            raise InspectionError("CapabilityUnavailable")
+
+    result = await WindowsInspectionProvider(
+        FixtureReader(), graphics_reader=FailedGraphicsReader()
+    ).gpu(details=False)
+    assert result.adapters[0].configuration.dedicated_vram_bytes is None
+    assert result.warnings[0].source == "DXGI adapter inventory"
+
+
+def test_vendor_gpu_capacity_overrides_dxgi_capacity_without_adding_telemetry():
+    dxgi = [
+        {
+            "Name": "Fixture GPU",
+            "DedicatedVideoMemory": 11 * 1024**3,
+            "VendorId": 0x1234,
+        }
+    ]
+    vendor = [
+        {
+            "Name": "Fixture GPU",
+            "DedicatedVideoMemory": 12 * 1024**3,
+            "CapacitySource": "Vendor inventory",
+        }
+    ]
+    merged = WindowsCimReader._merge_graphics_memory(dxgi, vendor)
+    assert merged[0]["DedicatedVideoMemory"] == 12 * 1024**3
+    assert merged[0]["CapacitySource"] == "Vendor inventory"
+    assert "Utilization" not in merged[0]
 
 
 @pytest.mark.asyncio
 async def test_storage_reports_disks_volumes_details_and_low_space_observation():
-    provider = WindowsInspectionProvider(FixtureReader())
+    reader = FixtureReader()
+    provider = WindowsInspectionProvider(
+        reader,
+        storage_reliability_reader=reader,
+        storage_trim_reader=reader,
+        volume_encryption_reader=reader,
+    )
     basic = await provider.storage(details=False)
     assert basic.physical_disks[0].configuration.media_type == "SSD"
     assert basic.physical_disks[0].configuration.bus_type == "NVMe"
@@ -596,14 +723,54 @@ async def test_storage_reports_disks_volumes_details_and_low_space_observation()
     assert detailed.physical_disks[0].details is not None
     assert detailed.physical_disks[0].details.partition_style == "GPT"
     assert detailed.physical_disks[0].details.serial_number == "DISK-SERIAL"
+    assert detailed.physical_disks[0].details.temperature_celsius == 39
+    assert detailed.physical_disks[0].details.read_errors == 2
+    assert detailed.physical_disks[0].details.wear_percent == 4
     assert detailed.volumes[0].details is not None
-    assert detailed.volumes[0].details.encryption_status is None
+    assert detailed.volumes[0].details.encryption_status == "FullyEncrypted"
+    assert detailed.volumes[0].details.encryption_protection == "On"
+    assert detailed.trim_configuration[0].delete_notifications_enabled
+
+
+@pytest.mark.asyncio
+async def test_storage_optional_provider_failures_preserve_base_inventory():
+    class FailedStorageReader:
+        async def storage_reliability(self) -> list[dict[str, JsonValue]]:
+            raise InspectionError("PermissionDenied")
+
+        async def volume_encryption(self) -> list[dict[str, JsonValue]]:
+            raise InspectionError("PermissionDenied")
+
+        async def trim_configuration(self) -> list[dict[str, JsonValue]]:
+            raise InspectionError("CapabilityUnavailable")
+
+    reader = FixtureReader()
+    failed = FailedStorageReader()
+    result = await WindowsInspectionProvider(
+        reader,
+        storage_reliability_reader=failed,
+        storage_trim_reader=failed,
+        volume_encryption_reader=failed,
+    ).storage(details=True)
+    assert result.physical_disks[0].details is not None
+    assert result.physical_disks[0].details.temperature_celsius is None
+    assert result.volumes[0].details is not None
+    assert result.volumes[0].details.encryption_status is None
+    assert result.trim_configuration == []
+    assert {warning.code for warning in result.warnings} == {
+        "PermissionDenied",
+        "CapabilityUnavailable",
+    }
 
 
 @pytest.mark.asyncio
 async def test_network_default_and_details_are_scoped_and_structured():
     reader = FixtureReader()
-    provider = WindowsInspectionProvider(reader)
+    provider = WindowsInspectionProvider(
+        reader,
+        network_statistics_reader=reader,
+        wifi_quality_reader=reader,
+    )
     basic = await provider.network(details=False)
     assert len(basic.adapters) == 1
     adapter = basic.adapters[0]
@@ -612,6 +779,11 @@ async def test_network_default_and_details_are_scoped_and_structured():
     assert adapter.current_state.link_speed_bps == 2500000000
     assert adapter.current_state.ipv4_addresses == ["192.0.2.10"]
     assert adapter.current_state.ipv6_addresses == ["2001:db8::10"]
+    assert adapter.current_state.receive_bytes_per_second == 4096
+    assert adapter.current_state.send_bytes_per_second == 1024
+    assert adapter.current_state.throughput_measurement == "derived"
+    assert adapter.current_state.wifi_signal_percent == 82
+    assert adapter.current_state.wifi_receive_link_speed_bps == 866_000_000
     assert adapter.details is None
     adapter_request = next(
         request for request in reader.requests if request.class_name == "Win32_NetworkAdapter"
@@ -625,7 +797,23 @@ async def test_network_default_and_details_are_scoped_and_structured():
     assert item.driver_provider == "Fixture Network Provider"
     assert item.mtu_bytes == 1500
     assert item.routes[0].next_hop == "192.0.2.1"
+    assert item.receive_errors == 2
+    assert item.send_discards == 3
+    assert item.throughput_sample_seconds == 0.5
     assert detailed.adapters[0].current_state.wifi_ssid is None
+
+
+@pytest.mark.asyncio
+async def test_network_statistics_failure_preserves_adapter_inventory():
+    class FailedStatisticsReader:
+        async def network_statistics(self) -> list[dict[str, JsonValue]]:
+            raise InspectionError("PermissionDenied")
+
+    result = await WindowsInspectionProvider(
+        FixtureReader(), network_statistics_reader=FailedStatisticsReader()
+    ).network(details=False)
+    assert result.adapters[0].current_state.receive_bytes_per_second is None
+    assert result.warnings[0].source == "Network adapter statistics"
 
 
 @pytest.mark.asyncio
@@ -670,7 +858,7 @@ async def test_processes_are_ranked_and_details_tolerate_protected_fields():
 @pytest.mark.asyncio
 async def test_services_default_and_details_are_curated():
     reader = FixtureReader()
-    provider = WindowsInspectionProvider(reader)
+    provider = WindowsInspectionProvider(reader, service_dependency_reader=reader)
     basic = await provider.services(details=False)
     assert basic.services[0].identity.name == "FixtureService"
     assert basic.services[0].configuration.startup_type == "Auto"
@@ -681,6 +869,22 @@ async def test_services_default_and_details_are_curated():
     assert detailed.services[0].details is not None
     assert detailed.services[0].details.service_account == "LocalSystem"
     assert detailed.services[0].details.pid == 123
+    assert detailed.services[0].details.dependencies == ["RpcSs"]
+    assert detailed.services[0].details.dependent_services == ["DependentFixture"]
+
+
+@pytest.mark.asyncio
+async def test_service_dependency_failure_preserves_service_inventory():
+    class FailedDependencyReader:
+        async def service_dependencies(self) -> list[dict[str, JsonValue]]:
+            raise InspectionError("PermissionDenied")
+
+    result = await WindowsInspectionProvider(
+        FixtureReader(), service_dependency_reader=FailedDependencyReader()
+    ).services(details=True)
+    assert result.services[0].details is not None
+    assert result.services[0].details.dependencies == []
+    assert result.warnings[0].source == "Service dependency inventory"
 
 
 @pytest.mark.asyncio
@@ -1033,6 +1237,109 @@ async def test_windows_software_reader_validates_structured_output(
     await_call = execute.await_args
     assert await_call is not None
     assert await_call.args[1] == b""
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("method_name", "payload"),
+    [
+        (
+            "service_dependencies",
+            b'[{"Antecedent":"RpcSs","Dependent":"FixtureService"}]',
+        ),
+        (
+            "trim_configuration",
+            b'[{"FileSystem":"NTFS","DeleteNotificationsEnabled":true}]',
+        ),
+        (
+            "network_statistics",
+            b'[{"Name":"Wi-Fi","ReceiveBytesPerSecond":1024}]',
+        ),
+    ],
+)
+async def test_specialized_windows_readers_validate_structured_output(
+    monkeypatch: pytest.MonkeyPatch,
+    method_name: str,
+    payload: bytes,
+):
+    reader = WindowsCimReader()
+    execute = AsyncMock(return_value=payload)
+    monkeypatch.setattr(reader, "_execute", execute)
+    method = getattr(reader, method_name)
+    rows = await method()
+    assert len(rows) == 1
+    assert execute.await_args is not None
+    assert execute.await_args.args[1] == b""
+
+
+@pytest.mark.asyncio
+async def test_windows_wifi_quality_reader_maps_native_permission_failure(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    def denied() -> list[dict[str, JsonValue]]:
+        raise PermissionError("denied")
+
+    monkeypatch.setattr("sys_eden.windows_native.query_wifi_quality", denied)
+    with pytest.raises(InspectionError, match="PermissionDenied"):
+        await WindowsCimReader().wifi_quality()
+
+
+@pytest.mark.asyncio
+async def test_windows_graphics_reader_uses_vendor_capacity_over_dxgi(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(
+        "sys_eden.windows_native.query_dxgi_adapters",
+        lambda: [{"Name": "Fixture GPU", "DedicatedVideoMemory": 11 * 1024**3}],
+    )
+    reader = WindowsCimReader()
+    monkeypatch.setattr(
+        reader,
+        "_nvidia_memory_inventory",
+        AsyncMock(
+            return_value=[
+                {
+                    "Name": "Fixture GPU",
+                    "DedicatedVideoMemory": 12 * 1024**3,
+                    "CapacitySource": "NVIDIA SMI",
+                }
+            ]
+        ),
+    )
+    rows = await reader.graphics_adapters()
+    assert rows[0]["DedicatedVideoMemory"] == 12 * 1024**3
+    assert rows[0]["CapacitySource"] == "NVIDIA SMI"
+
+
+@pytest.mark.asyncio
+async def test_windows_graphics_reader_keeps_vendor_fallback_when_dxgi_fails(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    def unavailable() -> list[dict[str, JsonValue]]:
+        raise OSError("DXGI unavailable")
+
+    monkeypatch.setattr("sys_eden.windows_native.query_dxgi_adapters", unavailable)
+    reader = WindowsCimReader()
+    monkeypatch.setattr(
+        reader,
+        "_nvidia_memory_inventory",
+        AsyncMock(
+            return_value=[
+                {
+                    "Name": "Fixture GPU",
+                    "DedicatedVideoMemory": 1,
+                    "CapacitySource": "NVIDIA SMI",
+                }
+            ]
+        ),
+    )
+    assert await reader.graphics_adapters() == [
+        {
+            "Name": "Fixture GPU",
+            "DedicatedVideoMemory": 1,
+            "CapacitySource": "NVIDIA SMI",
+        }
+    ]
 
 
 def test_event_query_rejects_unbounded_or_arbitrary_logs():

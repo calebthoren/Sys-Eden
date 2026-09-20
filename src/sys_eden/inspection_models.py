@@ -201,6 +201,9 @@ class GpuDetails(InspectionModel):
     driver_inf: str | None = None
     driver_signed: bool | None = None
     video_processor: str | None = None
+    dedicated_vram_source: str | None = None
+    shared_system_memory_bytes: int | None = None
+    adapter_luid: str | None = None
     current_clock_mhz: float | None = None
     vram_used_bytes: int | None = None
     power_watts: float | None = None
@@ -243,6 +246,8 @@ class DiskDetails(InspectionModel):
     temperature_celsius: float | None = None
     read_errors: int | None = None
     write_errors: int | None = None
+    wear_percent: float | None = None
+    power_on_hours: int | None = None
 
 
 class PhysicalDisk(InspectionModel):
@@ -272,6 +277,8 @@ class VolumeState(InspectionModel):
 class VolumeDetails(InspectionModel):
     path: str | None = None
     encryption_status: str | None = None
+    encryption_protection: str | None = None
+    encryption_method: str | None = None
 
 
 class StorageVolume(InspectionModel):
@@ -283,10 +290,18 @@ class StorageVolume(InspectionModel):
     details: VolumeDetails | None = None
 
 
+class FilesystemTrimConfiguration(InspectionModel):
+    filesystem: str
+    delete_notifications_enabled: bool | None = None
+    source: str = "fsutil"
+    measurement_type: Literal["configuration"] = "configuration"
+
+
 class StorageInspection(InspectionModel):
     kind: Literal["storage"] = "storage"
     physical_disks: list[PhysicalDisk] = Field(default_factory=list)
     volumes: list[StorageVolume] = Field(default_factory=list)
+    trim_configuration: list[FilesystemTrimConfiguration] = Field(default_factory=list)
     observations: list[Observation] = Field(default_factory=list)
     warnings: list[SourceWarning] = Field(default_factory=list)
 
@@ -310,6 +325,7 @@ class NetworkState(InspectionModel):
     dns_servers: list[str] = Field(default_factory=list)
     receive_bytes_per_second: int | None = None
     send_bytes_per_second: int | None = None
+    throughput_measurement: Literal["derived"] | None = None
     wifi_ssid: str | None = None
     wifi_signal_percent: float | None = None
     wifi_receive_link_speed_bps: int | None = None
@@ -343,6 +359,7 @@ class NetworkDetails(InspectionModel):
     send_errors: int | None = None
     receive_discards: int | None = None
     send_discards: int | None = None
+    throughput_sample_seconds: float | None = None
 
 
 class NetworkAdapter(InspectionModel):

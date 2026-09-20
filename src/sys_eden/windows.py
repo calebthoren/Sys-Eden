@@ -1,6 +1,7 @@
 """Fixed read-only CIM script executed as the current user without shell interpolation."""
 
 import asyncio
+import csv
 import os
 import subprocess
 import sys
@@ -54,6 +55,69 @@ $rows = foreach ($root in $roots) {
         }
 }
 ConvertTo-Json -InputObject @($rows) -Depth 4 -Compress
+"""
+
+_SERVICE_DEPENDENCY_SCRIPT = """
+$ErrorActionPreference = 'Stop'
+[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
+$rows = foreach ($relation in @(Get-CimInstance -ClassName Win32_DependentService)) {
+    [PSCustomObject]@{
+        Antecedent = $relation.Antecedent.Name
+        Dependent = $relation.Dependent.Name
+        TypeOfDependency = $relation.TypeOfDependency
+    }
+}
+ConvertTo-Json -InputObject @($rows) -Depth 3 -Compress
+"""
+
+_TRIM_CONFIGURATION_SCRIPT = r"""
+$ErrorActionPreference = 'Stop'
+[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
+$output = @(& "$env:SystemRoot\System32\fsutil.exe" behavior query DisableDeleteNotify 2>$null)
+if ($LASTEXITCODE -ne 0) { exit 1 }
+$rows = foreach ($line in $output) {
+    if ($line -match '^\s*(?<filesystem>\S+)\s+DisableDeleteNotify\s*=\s*(?<value>[01])') {
+        [PSCustomObject]@{
+            FileSystem = $matches.filesystem
+            DeleteNotificationsEnabled = ($matches.value -eq '0')
+        }
+    }
+}
+ConvertTo-Json -InputObject @($rows) -Depth 3 -Compress
+"""
+
+_NETWORK_STATISTICS_SCRIPT = """
+$ErrorActionPreference = 'Stop'
+[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
+$before = @(Get-NetAdapterStatistics -ErrorAction Stop)
+$timer = [Diagnostics.Stopwatch]::StartNew()
+Start-Sleep -Milliseconds 500
+$after = @(Get-NetAdapterStatistics -ErrorAction Stop)
+$timer.Stop()
+$elapsed = $timer.Elapsed.TotalSeconds
+$byName = @{}
+foreach ($item in $before) { $byName[[string]$item.Name] = $item }
+$rows = foreach ($item in $after) {
+    $previous = $byName[[string]$item.Name]
+    $receiveRate = $null
+    $sendRate = $null
+    if ($null -ne $previous -and $elapsed -gt 0) {
+        $receiveRate = [Math]::Max(0, [int64](($item.ReceivedBytes - $previous.ReceivedBytes) / $elapsed))
+        $sendRate = [Math]::Max(0, [int64](($item.SentBytes - $previous.SentBytes) / $elapsed))
+    }
+    [PSCustomObject]@{
+        Name = $item.Name
+        InterfaceDescription = $item.InterfaceDescription
+        ReceiveBytesPerSecond = $receiveRate
+        SendBytesPerSecond = $sendRate
+        SampleSeconds = $elapsed
+        ReceivedPacketErrors = $item.ReceivedPacketErrors
+        OutboundPacketErrors = $item.OutboundPacketErrors
+        ReceivedDiscardedPackets = $item.ReceivedDiscardedPackets
+        OutboundDiscardedPackets = $item.OutboundDiscardedPackets
+    }
+}
+ConvertTo-Json -InputObject @($rows) -Depth 3 -Compress
 """
 
 _EVENT_SCRIPT = """
@@ -130,6 +194,124 @@ class WindowsCimReader:
             return _ROWS.validate_json(stdout)
         except ValidationError as error:
             raise InspectionError("InvalidToolOutput") from error
+
+    async def graphics_adapters(self) -> list[dict[str, JsonValue]]:
+        from sys_eden.windows_native import query_dxgi_adapters
+
+        dxgi_rows: list[dict[str, JsonValue]] = []
+        dxgi_error: OSError | None = None
+        try:
+            async with asyncio.timeout(5):
+                dxgi_rows = await asyncio.to_thread(query_dxgi_adapters)
+        except TimeoutError as error:
+            raise InspectionError("ToolTimeout") from error
+        except OSError as error:
+            dxgi_error = error
+        nvidia_rows = await self._nvidia_memory_inventory()
+        if not dxgi_rows and not nvidia_rows and dxgi_error is not None:
+            raise InspectionError("CapabilityUnavailable") from dxgi_error
+        return self._merge_graphics_memory(dxgi_rows, nvidia_rows)
+
+    async def service_dependencies(self) -> list[dict[str, JsonValue]]:
+        stdout = await self._execute(_SERVICE_DEPENDENCY_SCRIPT, b"")
+        try:
+            return _ROWS.validate_json(stdout)
+        except ValidationError as error:
+            raise InspectionError("InvalidToolOutput") from error
+
+    async def trim_configuration(self) -> list[dict[str, JsonValue]]:
+        stdout = await self._execute(_TRIM_CONFIGURATION_SCRIPT, b"")
+        try:
+            return _ROWS.validate_json(stdout)
+        except ValidationError as error:
+            raise InspectionError("InvalidToolOutput") from error
+
+    async def network_statistics(self) -> list[dict[str, JsonValue]]:
+        stdout = await self._execute(_NETWORK_STATISTICS_SCRIPT, b"")
+        try:
+            return _ROWS.validate_json(stdout)
+        except ValidationError as error:
+            raise InspectionError("InvalidToolOutput") from error
+
+    async def wifi_quality(self) -> list[dict[str, JsonValue]]:
+        from sys_eden.windows_native import query_wifi_quality
+
+        try:
+            async with asyncio.timeout(5):
+                return await asyncio.to_thread(query_wifi_quality)
+        except TimeoutError as error:
+            raise InspectionError("ToolTimeout") from error
+        except PermissionError as error:
+            raise InspectionError("PermissionDenied") from error
+        except OSError as error:
+            raise InspectionError("CapabilityUnavailable") from error
+
+    async def _nvidia_memory_inventory(self) -> list[dict[str, JsonValue]]:
+        executable = Path(os.environ.get("SystemRoot", "C:/Windows")) / "System32/nvidia-smi.exe"
+        if not executable.is_file():
+            return []
+        try:
+            process = await asyncio.create_subprocess_exec(
+                str(executable),
+                "--query-gpu=name,memory.total,pci.bus_id",
+                "--format=csv,noheader,nounits",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.DEVNULL,
+                creationflags=subprocess.CREATE_NO_WINDOW,
+            )
+        except OSError:
+            return []
+        try:
+            async with asyncio.timeout(5):
+                stdout, _ = await process.communicate()
+        except (TimeoutError, asyncio.CancelledError) as error:
+            if process.returncode is None:
+                process.kill()
+            await process.wait()
+            if isinstance(error, asyncio.CancelledError):
+                raise
+            return []
+        if process.returncode != 0:
+            return []
+        rows: list[dict[str, JsonValue]] = []
+        for fields in csv.reader(stdout.decode("utf-8", errors="replace").splitlines()):
+            if len(fields) != 3:
+                continue
+            name, memory_mib, pci_bus_id = (field.strip() for field in fields)
+            try:
+                capacity = int(memory_mib) * 1024**2
+            except ValueError:
+                continue
+            rows.append(
+                {
+                    "Name": name,
+                    "DedicatedVideoMemory": capacity,
+                    "PciBusId": pci_bus_id,
+                    "CapacitySource": "NVIDIA SMI",
+                }
+            )
+        return rows
+
+    @staticmethod
+    def _merge_graphics_memory(
+        dxgi_rows: list[dict[str, JsonValue]],
+        vendor_rows: list[dict[str, JsonValue]],
+    ) -> list[dict[str, JsonValue]]:
+        merged = [row | {"CapacitySource": "DXGI"} for row in dxgi_rows]
+        for vendor in vendor_rows:
+            name = vendor.get("Name")
+            matches = []
+            if isinstance(name, str):
+                for row in merged:
+                    row_name = row.get("Name")
+                    if isinstance(row_name, str) and row_name.casefold() == name.casefold():
+                        matches.append(row)
+            if not matches:
+                merged.append(vendor)
+                continue
+            for match in matches:
+                match.update(vendor)
+        return merged
 
     async def query_events(self, request: EventQuery) -> list[dict[str, JsonValue]]:
         stdout = await self._execute(_EVENT_SCRIPT, request.model_dump_json().encode("utf-8"))
