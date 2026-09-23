@@ -12,7 +12,8 @@ from sqlalchemy import Engine, create_engine, event, text
 from sqlalchemy.engine import URL
 from sqlalchemy.orm import Session, sessionmaker
 
-BASELINE_REVISION = "0001"
+HEAD_REVISION = "0002"
+SUPPORTED_REVISIONS = {"0001", HEAD_REVISION}
 
 
 class StorageError(Exception):
@@ -47,12 +48,13 @@ class Database:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self.engine.connect() as connection:
             revision = MigrationContext.configure(connection).get_current_revision()
-            if revision == BASELINE_REVISION:
+            if revision == HEAD_REVISION:
                 return
-            if revision is not None:
+            if revision is not None and revision not in SUPPORTED_REVISIONS:
                 raise StorageError("Unsupported database schema revision")
         # Use SQLite's backup API so existing WAL contents are included.
-        backup = self.path.with_suffix(".pre-migration.db")
+        source_revision = revision or "unversioned"
+        backup = self.path.with_suffix(f".pre-{source_revision}.db")
         if backup.exists():
             raise StorageError("A pre-migration backup already exists; preserve it for review")
         with sqlite3.connect(self.path) as source, sqlite3.connect(backup) as target:
@@ -74,7 +76,7 @@ class Database:
     def healthy(self) -> bool:
         with self.session() as session:
             return session.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == (
-                BASELINE_REVISION
+                HEAD_REVISION
             )
 
     def close(self) -> None:

@@ -17,7 +17,7 @@ def test_baseline_is_repeatable_and_sqlite_settings_apply(tmp_path: Path):
             assert session.execute(text("PRAGMA foreign_keys")).scalar_one() == 1
             assert session.execute(text("PRAGMA journal_mode")).scalar_one() == "wal"
             assert session.execute(text("PRAGMA busy_timeout")).scalar_one() == 5000
-        assert database.path.with_suffix(".pre-migration.db").exists()
+        assert database.path.with_suffix(".pre-unversioned.db").exists()
     finally:
         database.close()
 
@@ -54,5 +54,23 @@ def test_unknown_revision_preserved(tmp_path: Path):
             assert session.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == (
                 "future"
             )
+    finally:
+        database.close()
+
+
+def test_known_older_revision_is_backed_up_and_upgraded(tmp_path: Path):
+    path = tmp_path / "eden.db"
+    with sqlite3.connect(path) as connection:
+        connection.execute("CREATE TABLE alembic_version (version_num TEXT NOT NULL)")
+        connection.execute("INSERT INTO alembic_version VALUES ('0001')")
+    database = Database(path)
+    try:
+        database.initialize()
+        assert database.healthy()
+        assert path.with_suffix(".pre-0001.db").exists()
+        with database.session() as session:
+            assert session.execute(
+                text("SELECT name FROM sqlite_master WHERE type='table' AND name='reports'")
+            ).scalar_one() == "reports"
     finally:
         database.close()

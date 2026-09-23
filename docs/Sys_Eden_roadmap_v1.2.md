@@ -10,7 +10,7 @@
 
 # 1. Purpose
 
-## Implementation checkpoint — 2026-09-18
+## Implementation checkpoint — 2026-09-19
 
 Phase 0 and Milestone 1 have passed their functional acceptance checks:
 configuration and independent storage budgets, structured logging, SQLite/WAL and
@@ -34,8 +34,7 @@ generic WER parameters a meaning outside known report schemas. All inspection
 runs in the current user's context, performs no mutation or external IP lookup,
 and does not grant a model administrator execution. Validation covers 46 tests,
 Ruff, Pyright, live collector smoke tests, and a structured all-component
-snapshot. Milestone 3, structured reports and knowledge history, is next; its
-implementation has not started.
+snapshot.
 
 A focused post-acceptance inspection capability audit completed on 2026-09-19.
 It replaced the 32-bit video-controller memory field with DXGI plus a fixed
@@ -44,10 +43,32 @@ filesystem delete-notification configuration, sampled adapter throughput and
 error counters, and location-independent Wi-Fi quality. Storage reliability and
 BitLocker providers were denied to the current user and remain behind typed
 interfaces for the planned System Service. Location-sensitive SSID access remains
-subject to Windows location consent. Milestone 3 remains unstarted pending the
-explicit instruction to continue. The audit implementation is validated by 57
+subject to Windows location consent. The audit implementation is validated by 57
 tests, Ruff, Pyright, and live normal-user inspection smoke checks.
-The repository retains the initial `src/sys_eden/` package spelling.
+
+The Milestone 3 implementation, structured reports and knowledge history, has
+passed its functional acceptance criteria and is ready for the project commit.
+Reports are validated AI-native domain objects
+stored transactionally in SQLite through a dedicated repository. The aggregate
+preserves lifecycle state/status, priority and activity, purpose/component tags,
+observations, hypotheses, evidence references, five-dimensional confidence
+history, verification results, one primary chain, and typed report
+relationships. Lifecycle validation rejects inconsistent closure and prevents a
+report from becoming Resolved without passing verification. Updates use
+optimistic revisions so stale writers cannot silently overwrite newer history.
+
+Alembic revision `0002` owns the normalized report tables. Fresh databases and
+revision `0001` databases upgrade to the current schema after a verified,
+revision-specific SQLite backup; unknown future revisions remain untouched.
+Metadata-first repository search supports text, lifecycle, priority, tag, and
+chain filters. `eden report list`, `eden report show`, and `eden report export`
+expose concise listings, generated human views, compact AI retrieval capsules,
+and portable canonical JSON. Exports refuse to overwrite an existing file.
+
+Validation covers 64 tests, Ruff, Pyright, CLI help/report-command smoke checks,
+and a package build. Milestone 4, local model integration, is next after this
+changeset is committed. The repository retains the initial `src/sys_eden/`
+package spelling.
 
 
 This roadmap turns the Sys Eden architecture into an implementation sequence.

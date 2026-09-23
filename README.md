@@ -1,7 +1,8 @@
 # Sys Eden
 
-Local-first Windows system companion. Milestone 2 read-only inspection is complete;
-Milestone 3 structured reports and knowledge history is next in roadmap order.
+Local-first Windows system companion. The Milestone 3 structured-report
+implementation passes its functional checks and is ready to commit; Milestone 4
+local model integration is next in roadmap order after that commit.
 
 Read [AGENTS.md](AGENTS.md) and the versioned canonical documents in [docs](docs/).
 The roadmap owns implementation order.
@@ -114,3 +115,24 @@ administrator-level AI execution. Values that need a more reliable provider,
 extra permission, or vendor telemetry remain explicitly unavailable.
 See the [read-only inspection capability audit](docs/Sys_Eden_inspection_capability_audit_v1.0.md)
 for provider, permission, live-result, and deferral decisions.
+
+Structured report retrieval commands:
+
+```powershell
+uv run eden report list
+uv run eden report list --status resolved --component gpu
+uv run eden report show <id>
+uv run eden report show <id> --capsule
+uv run eden report show <id> --json
+uv run eden report export <id>
+uv run eden report export <id> --output report.json
+```
+
+Reports are validated structured domain objects persisted transactionally in
+SQLite. They retain lifecycle state/status, tags, observations, hypotheses,
+evidence references, confidence history, verification, one primary chain, and
+typed relationships. Resolved reports require passing verification. Repository
+updates use optimistic revisions, and metadata-first search can filter without
+loading complete report aggregates. Human views, compact AI capsules, and JSON
+exports are generated from the same canonical data. Export-to-file refuses to
+overwrite an existing path.
