@@ -3,11 +3,11 @@
 Local-first Windows system companion. Milestones 1 through 4 provide a runnable
 Core, broad read-only Windows inspection, durable structured reports, and local
 structured diagnostic reasoning through a replaceable model provider. Milestone
-5 has passed functional and owner visual acceptance: durable tasks, restart
+5 is complete with functional and owner visual acceptance: durable tasks, restart
 recovery, conversation persistence, storage attribution, unified chat/diagnostics,
 and the separate Core/CLI connection are implemented. Final validation passes
-239 tests, Ruff, Pyright, and all eight packaged live checks. Publication and
-milestone signoff are tracked in GitHub #11/#1. Milestone 6 objective issues are
+239 tests, Ruff, Pyright, and all eight packaged live checks. The verified source
+and issue templates are published on GitHub. Milestone 6 objective issues are
 ready under [overview #12](https://github.com/calebthoren/Sys-Eden/issues/12), with
 implementation not started. Use the
 [Milestone 5 test handoff](docs/Sys_Eden_milestone_5_acceptance_v1.0.md) to run an

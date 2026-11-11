@@ -37,8 +37,9 @@ The acceptance guide maps all 35 roadmap checks to objective issues.
 
 [Milestone 6 overview #12](https://github.com/calebthoren/Sys-Eden/issues/12)
 links objective issues #17–#25 with dependencies, acceptance checks, and initial
-Not started status. Milestone 5 implementation acceptance and the owner's visual
-approval are recorded; final publication/signoff is tracked in #11/#1.
+Not started status. Milestone 5 implementation acceptance, owner visual approval,
+final validation, and source/template publication are complete; #11/#1 record
+the closeout evidence.
 
 File each independent defect as a linked issue with candidate/commit, reproduction
 steps, expected/actual behavior, impact, and a verification checklist. Preserve

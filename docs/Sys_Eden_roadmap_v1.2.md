@@ -95,15 +95,16 @@ prompt tokens and 772 completion tokens and completed in about 11 seconds with
 the model loaded. Validation covers 73 tests, Ruff, Pyright, model/CLI smoke
 checks, the real structured diagnostic run, and a package build.
 
-Milestone 5 has passed functional and owner visual acceptance. Durable task state/recovery, Core/client
+Milestone 5 is complete with functional and owner visual acceptance. Durable task state/recovery, Core/client
 separation, unified chat-to-diagnostics routing, temporary/saved conversations,
 report contributions/retention review, storage attribution, and the interactive
 CLI are implemented and committed. Final validation passes 239 tests, Ruff,
 Pyright, and all eight live packaged checks on approved candidate
 `896c70ed7b94cc99`. The source distribution/wheel build succeeds. See
 `Sys_Eden_milestone_5_acceptance_v1.0.md` for all 35 acceptance items mapped to
-GitHub issues and the evidence. Source publication/final signoff remain tracked
-in GitHub #11/#1. Milestone 6 remains next; its objective issues are Not started.
+GitHub issues and the evidence. The verified source and issue templates are
+published on GitHub; final signoff is recorded in #11/#1. Milestone 6 is next;
+its objective issues are Not started.
 
 
 This roadmap turns the Sys Eden architecture into an implementation sequence.

@@ -6,8 +6,9 @@
 Milestone 5 implements durable tasks, the Core/client boundary, conversation
 persistence, progress, report links, storage visibility, and the integrated CLI.
 Its canonical requirements remain in `Sys_Eden_roadmap_v1.2.md`, section 9.
-The owner has explicitly approved the final visuals. Final publication/signoff
-is tracked in GitHub #11/#1; the checks below now pass on the approved candidate.
+The owner explicitly approved the final visuals and requested full closeout.
+All final checks pass on the approved candidate. Verified source and issue
+templates are published on GitHub; #11/#1 record the milestone signoff.
 
 ## Start testing
 
@@ -87,8 +88,8 @@ to work, with these requested CLI corrections:
 - [#16](https://github.com/calebthoren/Sys-Eden/issues/16): two wrapped transcript
   lines per mouse-wheel event, retaining Page Up/Down for larger movements.
 
-DEC-053 updates the accepted layout. These corrections need owner retesting;
-general positive feedback does not imply every checklist item was exercised.
+DEC-053 defines the accepted layout. The owner has now explicitly approved its
+final appearance; automated evidence covers the individual failure fixtures.
 
 Use [overview #1](https://github.com/calebthoren/Sys-Eden/issues/1) and the linked
 objective issues. A useful result is: candidate ID, objective/check, steps,
@@ -174,14 +175,14 @@ To prepare a later candidate after fixes, build a fresh wheel and run
 tests. Existing candidates and test data are preserved. Keep using an explicit
 candidate ID so a newer build cannot silently replace the one being tested.
 
-## Remaining closeout gates
+## Completed closeout gates
 
 - [x] Record the owner's acceptance results and fix blocking defects.
 - [x] Complete live packaged smoke verification and record its outcome.
 - [x] Review the changed scope and exclude private runtime artifacts from the release.
 - [x] Commit the verified implementation as a local owner-acceptance snapshot.
-- [ ] Publish reviewed code/templates to GitHub when ready for that handoff.
-- [ ] Mark Milestone 5 complete only after its required checks pass.
+- [x] Publish reviewed code/templates to GitHub and verify the remote tree and file hashes.
+- [x] Mark Milestone 5 complete after required checks and explicit owner approval.
 
 Milestone 6 remains next: planning, risk evaluation, and scoped approval before
 system writes. Native GitHub milestone/custom-status-label setup remains pending;
@@ -219,3 +220,15 @@ Visual owner retesting remains pending.
 Milestone 6 is prepared in [overview #12](https://github.com/calebthoren/Sys-Eden/issues/12)
 with nine objective issues (#17?#25), each Not started. No implementation is
 claimed by creating those issues.
+
+## Publication and final transition
+
+The verified source snapshot is published on GitHub main in commit
+`d43a44e0942fba3b84a821f9d2ffef6ce9cc278c`. Its Git tree exactly matches
+the reviewed local source tree, and the issue template and CLI source blob
+hashes were checked after publication. Private runtime data, conversations,
+databases, local model files, and the untracked large artwork were excluded.
+The original granular development history remains preserved locally.
+
+The final documentation sync records this completed status. Milestone 6 remains
+Not started, with objective issues #17?#25 and dependencies under #12.
