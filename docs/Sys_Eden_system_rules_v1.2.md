@@ -1133,6 +1133,28 @@ External research should use only what is needed for the public question.
 
 Cloud inference, if ever used, is opt-in and scoped.
 
+## 63.1 Deferred Screen Access and Image Retention
+
+For the future capability in DEC-052, Off MUST prevent capture; Ask first
+requires scoped approval; Automatic permits task-related capture only within
+explicitly configured authority. Revocation MUST stop further capture and
+ongoing access. Screen contents are untrusted data, not instructions, approval,
+or authority to interact with the screen or change the machine.
+
+Sensitive screenshots, and those of uncertain sensitivity, MUST NOT be retained.
+Use transient local processing and release temporary image data after analysis.
+Non-sensitive screenshots MAY be saved locally while Eden expects to need them
+again for the associated task, and MUST be automatically deleted when that need
+ends. Selecting this feature includes its disclosed cleanup policy; routine
+expiry does not require a new deletion approval. Bound abandoned-task retention
+and recover cleanup after interruption/restart without extending the deadline.
+
+Image payloads MUST NOT enter ordinary logs or durable chat/report bodies.
+Deletion MUST include Eden-managed derived image copies and caches. Retained
+text must be purpose-limited and avoid unnecessary sensitive information;
+converting an image to text does not make its contents non-sensitive. Report
+links MUST NOT extend screenshot retention. No automatic external disclosure.
+
 ---
 
 # 64. Secrets
@@ -1857,6 +1879,41 @@ Then obtain explicit permission where needed.
 
 ---
 
+# 115.1 Conversation Persistence and Memory Capture
+
+Chat transcript persistence, report knowledge, and structured memory are
+different forms of retention.
+
+- Temporary chat is the privacy-first default for an unclassified
+  conversation.
+- Temporary, saved, and report-linked state must remain visible.
+- Eden must not silently promote a temporary transcript to durable storage.
+- A saved conversation may exist without a report.
+- Reports link to conversation artifacts rather than embedding raw transcripts.
+- Linking a temporary chat must disclose whether the transcript will be saved;
+  the user may choose a report contribution without retaining the transcript.
+- Saved raw chat from another conversation is not normal implicit context. Eden
+  uses it only on explicit request or after a visible relevance prompt.
+- Persistent transcripts visibly distinguish Full, Compact, and Deleted states.
+- Full-to-Compact conversion requires an explicit user action or a previously
+  enabled retention policy; report closure alone is not deletion authority.
+- Pinned conversations and conversations linked to active/open work are
+  protected from ordinary automatic cleanup.
+- Storage status, detail, and recommendation commands are read-only. A cleanup
+  recommendation is not permission to compact or delete data.
+
+If ordinary language appears to request durable structured memory, Eden shows
+the exact proposed memory and asks before writing it. If the user invokes
+`/memory <content>` or the direct equivalent, that command is explicit authority
+to create the validated memory and no redundant intent prompt is required.
+
+Memory creation does not change conversation persistence. A memory may be
+created from a temporary chat while the transcript remains temporary. Deleting
+a transcript, editing a report, and forgetting a memory remain separate
+operations.
+
+---
+
 # 116. Stop Eden
 
 If the user disables Eden or monitoring:
@@ -1885,6 +1942,24 @@ Service records lightweight boot/system data while Core/UI/model remain off unti
 No normal continuous monitoring while Eden is off.
 
 Eden should disclose evidence gaps caused by being offline.
+
+## Intentional Core Stop
+
+Stopping Core must be distinguishable from closing a UI client, stopping the
+future System Service, and shutting down Windows.
+
+- `/exit` closes only the current client.
+- `/corestop` and `eden core stop` request a graceful user-context Core stop.
+- A client that issues `/corestop` remains open and changes to the Core-stopped
+  home; it does not behave as if `/exit` was entered.
+- The direct `eden core stop` command returns to its invoking terminal after the
+  result is known.
+- `/corestart` and `eden core start` explicitly start Core.
+- Both operations are idempotent and report when Core is already in that state.
+- Active durable work is checkpointed at the nearest safe boundary.
+- An intentional stop must not be treated as a crash or immediately undone by
+  automatic recovery.
+- Opening a CLI client does not itself start Core.
 
 ---
 

@@ -7,6 +7,7 @@ import pytest
 from pydantic import JsonValue, ValidationError
 from typer.testing import CliRunner
 
+import sys_eden.cli as cli_module
 from sys_eden.cli import app
 from sys_eden.inspection import (
     CimQuery,
@@ -1145,8 +1146,22 @@ def test_cli_defaults_to_human_and_supports_details_json(monkeypatch: pytest.Mon
         configuration=WindowsConfiguration(edition="Windows Test"),
         current_state=SystemState(last_boot_time=datetime(2026, 1, 1, tzinfo=UTC)),
     )
-    mocked = AsyncMock(return_value=inspection)
-    monkeypatch.setattr(WindowsInspectionProvider, "system", mocked)
+    calls: list[dict[str, object]] = []
+
+    def rpc(method: str, **params):
+        assert method == "inspection.inspect"
+        calls.append(params)
+        return [
+            InspectionResult(
+                capability="inspection.system",
+                started_at=datetime(2026, 1, 1, tzinfo=UTC),
+                finished_at=datetime(2026, 1, 1, tzinfo=UTC),
+                success=True,
+                data=inspection,
+            ).model_dump(mode="json")
+        ]
+
+    monkeypatch.setattr(cli_module, "_rpc_or_exit", rpc)
     runner = CliRunner()
     human = runner.invoke(app, ["inspect", "system"])
     assert human.exit_code == 0, human.output
@@ -1156,9 +1171,9 @@ def test_cli_defaults_to_human_and_supports_details_json(monkeypatch: pytest.Mon
     structured = runner.invoke(app, ["inspect", "system", "--details", "--json"])
     assert structured.exit_code == 0, structured.output
     payload = json.loads(structured.stdout)
-    assert payload[0]["data"]["identity"]["device_name"] == "EDEN-PC"
-    assert payload[0]["data"]["identity"]["manufacturer"] is None
-    assert mocked.await_args_list[-1].kwargs == {"details": True}
+    assert payload["data"][0]["data"]["identity"]["device_name"] == "EDEN-PC"
+    assert payload["data"][0]["data"]["identity"]["manufacturer"] is None
+    assert calls[-1] == {"component": "system", "details": True}
 
 
 @pytest.mark.asyncio

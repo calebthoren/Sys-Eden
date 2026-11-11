@@ -11,7 +11,12 @@ from sys_eden.report_models import (
 )
 
 
-def build_capsule(report: Report) -> ReportCapsule:
+def build_capsule(
+    report: Report,
+    *,
+    conversation_contributions: list[str] | None = None,
+    linked_conversation_ids: list[str] | None = None,
+) -> ReportCapsule:
     """Build compact model context from the canonical structured aggregate."""
     unresolved = [
         item.statement
@@ -35,6 +40,8 @@ def build_capsule(report: Report) -> ReportCapsule:
         verification=report.verifications[-1] if report.verifications else None,
         unresolved=unresolved,
         related_report_ids=[item.target_report_id for item in report.relationships],
+        conversation_contributions=conversation_contributions or [],
+        linked_conversation_ids=linked_conversation_ids or [],
         primary_chain_id=report.primary_chain_id,
         updated_at=report.updated_at,
     )

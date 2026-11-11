@@ -330,5 +330,7 @@ class ReportCapsule(BaseModel):
     verification: VerificationResult | None
     unresolved: list[str]
     related_report_ids: list[str]
+    conversation_contributions: list[str] = Field(default_factory=list)
+    linked_conversation_ids: list[str] = Field(default_factory=list)
     primary_chain_id: str | None
     updated_at: datetime

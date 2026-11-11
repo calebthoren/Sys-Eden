@@ -1,10 +1,61 @@
 import sqlite3
 from pathlib import Path
+from unittest.mock import Mock
 
 import pytest
 from sqlalchemy import text
 
+import sys_eden.storage as storage_module
 from sys_eden.storage import Database, StorageError
+
+
+def _sqlite_error(code: int) -> sqlite3.OperationalError:
+    error = sqlite3.OperationalError("generated SQLite failure")
+    error.sqlite_errorcode = code
+    return error
+
+
+def test_windows_wal_initialization_retries_only_the_transient_truncate_error(monkeypatch):
+    cursor = Mock(spec=sqlite3.Cursor)
+    cursor.execute.side_effect = [_sqlite_error(sqlite3.SQLITE_IOERR_TRUNCATE), None]
+    sleep = Mock()
+    monkeypatch.setattr(storage_module, "_WINDOWS", True)
+    monkeypatch.setattr(storage_module.time, "sleep", sleep)
+    storage_module._enable_wal(cursor)
+    assert cursor.execute.call_count == 2
+    sleep.assert_called_once_with(0.05)
+
+
+@pytest.mark.parametrize("windows, code", [
+    (True, sqlite3.SQLITE_IOERR_WRITE),
+    (True, sqlite3.SQLITE_CORRUPT),
+    (False, sqlite3.SQLITE_IOERR_TRUNCATE),
+])
+def test_other_storage_failures_are_not_retried(monkeypatch, windows, code):
+    cursor = Mock(spec=sqlite3.Cursor)
+    error = _sqlite_error(code)
+    cursor.execute.side_effect = error
+    sleep = Mock()
+    monkeypatch.setattr(storage_module, "_WINDOWS", windows)
+    monkeypatch.setattr(storage_module.time, "sleep", sleep)
+    with pytest.raises(sqlite3.OperationalError) as caught:
+        storage_module._enable_wal(cursor)
+    assert caught.value is error
+    assert cursor.execute.call_count == 1
+    sleep.assert_not_called()
+
+
+def test_windows_wal_recovery_retry_is_bounded(monkeypatch):
+    cursor = Mock(spec=sqlite3.Cursor)
+    error = _sqlite_error(sqlite3.SQLITE_IOERR_TRUNCATE)
+    cursor.execute.side_effect = error
+    monkeypatch.setattr(storage_module, "_WINDOWS", True)
+    monkeypatch.setattr(storage_module.time, "monotonic", Mock(side_effect=[0, 0, 3]))
+    monkeypatch.setattr(storage_module.time, "sleep", Mock())
+    with pytest.raises(sqlite3.OperationalError) as caught:
+        storage_module._enable_wal(cursor)
+    assert caught.value is error
+    assert cursor.execute.call_count == 2
 
 
 def test_baseline_is_repeatable_and_sqlite_settings_apply(tmp_path: Path):

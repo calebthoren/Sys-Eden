@@ -2,7 +2,7 @@
 
 > **Document role:** Canonical implementation roadmap  
 > **Status:** Roadmap v1.2 — storage budgets and minimal VM target incorporated  
-> **Depends on:** `vision.md`, `architecture.md`, `system_rules.md`, `reports.md`  
+> **Depends on:** `vision.md`, `architecture.md`, `system_rules.md`, `reports.md`, `conversations.md`
 > **Planning horizon:** September 2026 through approximately January 2027  
 > **Goal:** Produce a genuinely useful Windows MVP, not a complete final product
 
@@ -47,7 +47,7 @@ subject to Windows location consent. The audit implementation is validated by 57
 tests, Ruff, Pyright, and live normal-user inspection smoke checks.
 
 The Milestone 3 implementation, structured reports and knowledge history, has
-passed its functional acceptance criteria and is ready for the project commit.
+passed its functional acceptance criteria and is committed.
 Reports are validated AI-native domain objects
 stored transactionally in SQLite through a dedicated repository. The aggregate
 preserves lifecycle state/status, priority and activity, purpose/component tags,
@@ -65,10 +65,45 @@ chain filters. `eden report list`, `eden report show`, and `eden report export`
 expose concise listings, generated human views, compact AI retrieval capsules,
 and portable canonical JSON. Exports refuse to overwrite an existing file.
 
-Validation covers 64 tests, Ruff, Pyright, CLI help/report-command smoke checks,
-and a package build. Milestone 4, local model integration, is next after this
-changeset is committed. The repository retains the initial `src/sys_eden/`
-package spelling.
+Validation covered 64 tests, Ruff, Pyright, CLI help/report-command smoke checks,
+and a package build. The repository retains the initial `src/sys_eden/` package
+spelling.
+
+Milestone 4, local model integration, passed its functional acceptance criteria
+on 2026-09-22. Core now depends on an asynchronous `ModelProvider` contract for
+health, discovery, and generation. Deterministic fake and real local Ollama
+providers implement the same typed boundary. The Ollama adapter uses a
+loopback-only endpoint, disables proxy inheritance and redirects, applies bounded
+timeouts, exposes installed/loaded model metadata, refuses cloud-managed model
+entries, and maps failures to structured model error codes.
+
+The basic router filters installed models by locality, capabilities, estimated
+context fit, configured model preference, and speed/strength preference. The
+context builder creates bounded, origin-labeled sections and treats user/system/
+report content as untrusted data rather than authority. Diagnostic inference is
+validated against a Pydantic `DiagnosticAssessment` containing observations,
+hypotheses, unknowns, next checks, five-dimensional confidence, and a human
+explanation. `eden model health`, `eden model list`, and `eden chat` expose the
+vertical slice without mutation authority.
+
+The real acceptance run used Ollama 0.34.3 and local `qwen3.5:9b` (Q4_K_M,
+approximately 6.6 GB) under the configured 12 GB model budget. Eden collected a
+read-only system snapshot, routed it locally, rejected an initial malformed
+thinking-mode response, then passed after the adapter explicitly disabled
+separate thinking for schema-bound output. The validated assessment used 1,368
+prompt tokens and 772 completion tokens and completed in about 11 seconds with
+the model loaded. Validation covers 73 tests, Ruff, Pyright, model/CLI smoke
+checks, the real structured diagnostic run, and a package build.
+
+Milestone 5 has passed functional and owner visual acceptance. Durable task state/recovery, Core/client
+separation, unified chat-to-diagnostics routing, temporary/saved conversations,
+report contributions/retention review, storage attribution, and the interactive
+CLI are implemented and committed. Final validation passes 239 tests, Ruff,
+Pyright, and all eight live packaged checks on approved candidate
+`896c70ed7b94cc99`. The source distribution/wheel build succeeds. See
+`Sys_Eden_milestone_5_acceptance_v1.0.md` for all 35 acceptance items mapped to
+GitHub issues and the evidence. Source publication/final signoff remain tracked
+in GitHub #11/#1. Milestone 6 remains next; its objective issues are Not started.
 
 
 This roadmap turns the Sys Eden architecture into an implementation sequence.
@@ -369,7 +404,8 @@ No system mutation yet.
 
 ## Goal
 
-Move from chat responses to persistent work.
+Move from chat responses to persistent work and finalize the coherent MVP CLI
+design that will carry the project until the local web UI milestone.
 
 ## Implement
 
@@ -383,21 +419,305 @@ Move from chat responses to persistent work.
 - cancel,
 - waiting-user,
 - waiting-condition,
-- `recovery_required`.
+- `recovery_required`,
+- durable progress events with start time, current phase, completed major steps,
+  waiting/throttled state, and current operation,
+- monotonic elapsed-time tracking,
+- evidence-based ETA ranges and updates when estimation is supportable,
+- an explicit `estimating`/unavailable state instead of false-precision countdowns,
+- sanitized technical-operation details suitable for later execution traces,
+- a prominent pre-step warning for safe-boundary-only/non-stoppable segments,
+- one reusable progress representation for CLI now and local UI streaming later,
+- a finalized MVP CLI design system covering layout, status language, colors,
+  tables, spinners/progress indicators, warnings, errors, and detail disclosure,
+- readable no-color/non-interactive behavior and stable JSON output for scripts,
+- a stable versioned JSON envelope with structured errors, associations, and
+  explicit synthetic provenance,
+- one consistent CLI presentation with no simple/stylized mode toggle,
+- a concise English default view with optional expandable/following technical
+  details for the current provider, tool, or command,
+- an interactive CLI home/client screen when `eden` is launched in a terminal,
+- a full-terminal application using the alternate screen, with home
+  actions navigable by arrows and Enter and the original shell restored on exit,
+- a persistent interactive prompt where ordinary text starts or continues an
+  Eden conversation and `/commands` expose discoverable navigation/actions,
+- a dedicated transcript screen per conversation, with the conversation ID in
+  its header and Home retaining only working/completed activity summaries,
+- a prefix-filtered slash-command palette showing at most five commands at once
+  with arrow navigation through additional matches,
+- conversation identities and a repository for resumable chat transcripts,
+- visible temporary, saved, and report-linked conversation states,
+- privacy-first temporary chat as the default for unclassified conversation,
+- client-owned temporary chats retained across thread/home navigation until
+  that CLI client closes, with exit warning and disconnect-lease cleanup,
+- persistent chats that can be listed, resumed, exported, and deleted without
+  requiring a report,
+- separate report-to-conversation links so reports can reference full chat
+  history without embedding raw transcripts,
+- bounded recent-message context and rolling conversation summaries for
+  resumption after Core restart,
+- report contribution summaries only when a conversation adds material
+  information, with report views separating core information, supporting
+  information, and linked artifacts,
+- Full, Compact, and Deleted transcript storage states with visible status,
+- manual conversation compact/pin operations and a closed-report retention
+  checkpoint that preserves unique evidence before recommending cleanup,
+- initial read-only storage attribution through `eden storage status` with an
+  optional `--details` view, including reports, conversations, memory,
+  attachments, indexes, database overhead, and estimated reclaimable space,
+- home/menu navigation for chat, inspection, tasks, reports, models, health,
+  settings, help, and exit without requiring the user to memorize subcommands,
+- explicit separation between the CLI lifecycle and Eden's runtime lifecycle:
+  in the default Always-On mode, the background Service and Core start
+  automatically according to the startup architecture, while `eden` only opens
+  a client session and attaches to the already-running Core,
+- a fast client-open path that does not automatically perform broad inspection,
+  load a model, mutate the machine, or start/stop Eden's background runtime,
+- a clear unavailable/reconnecting state when the CLI cannot reach Core, without
+  silently treating opening the client as permission to boot or restart Eden,
+- a complete direct terminal command surface for every Eden operation, including
+  chat and inspection, so forms such as `eden chat "..."` and
+  `eden inspect gpu` perform one requested action and return without opening the
+  interactive home,
+- idempotent graceful Core lifecycle controls through `/corestart`, `/corestop`,
+  `eden core start`, and `eden core stop`, clearly distinct from `/exit`, which
+  closes only the current CLI client,
+- two-stage current-conversation stop behavior: safe stop first, then hard stop
+  on a repeated `/stop` or Ctrl+C,
+- TTY-aware behavior so redirected input/output and automation retain the direct
+  command interface rather than receiving an interactive menu,
+- shared application services underneath both the interactive shell and direct
+  commands so the menu does not become a second authority or behavior path.
 
 ## CLI
 
 ```text
+eden
+eden chat "Why is my PC running slowly?"
+eden chat "Help me plan a future PC build" --save
+eden chat "Continue the GPU investigation" --report RPT-0184
+eden chat "One more detail" --conversation CHT-0042
+eden chat list
+eden chat show CHT-0042
+eden chat export CHT-0042
+eden chat delete CHT-0042
+eden chat compact CHT-0042
+eden chat pin CHT-0042
+eden report close RPT-0184 --status failed --summary "..." --outcome "..."
+eden report retention RPT-0184
+eden report review-retention RPT-0184 --confirm-evidence-reviewed
+eden storage status
+eden storage status --details
+eden storage reports --details
+eden storage conversations --details
+eden storage attachments --details
+eden storage recommendations
+eden inspect gpu
 eden task list
 eden task show <id>
 eden task pause <id>
 eden task resume <id>
 eden task cancel <id>
+eden task reconcile <id> --outcome failed --reason "Reviewed the checkpoint"
+eden task show <id> --details
+eden settings show
+eden core start
+eden core stop
 ```
+
+The interactive home should make the major destinations visible and accept
+slash commands such as:
+
+```text
+/chat
+/new
+/save
+/compact
+/chats
+/resume CHT-0042
+/report RPT-0184
+/report unlink
+/report close RPT-0184 failed | <summary> | <outcome>
+/report retention RPT-0184
+/report review-retention RPT-0184 confirmed [unique-evidence-chat-ids...]
+/inspect
+/tasks
+/task reconcile <id> failed | <review reason>
+/reports
+/models
+/health
+/settings
+/help
+/corestart
+/corestop
+/stop
+/exit
+```
+
+Ordinary non-command text at the prompt is treated as a message to Eden. Exact
+screen layout and keyboard shortcuts are implementation details, but every menu
+item and slash command must call the same Core/application services used by the
+equivalent direct CLI command.
+
+Every Eden operation exposed by the interactive client must also have a direct
+terminal form. A direct command performs that operation and returns; it must not
+open the interactive home first. The installed product command is `eden`; using
+`uv run` is a development-repository launcher, not part of the user-facing CLI
+syntax. Navigation-only client actions such as `/exit` do not need a meaningless
+direct equivalent.
+
+`/corestop` and `eden core stop` use the same graceful Core-stop application
+service. Active tasks are checkpointed at safe boundaries for recovery on
+Core's next start. The client stays open on a Core-stopped home without a chat
+bar. `/corestart` and `eden core start` use the same start operation. Repeating
+either operation in its current state returns an informational message.
+
+In the default Always-On mode, Eden's background runtime starts automatically
+with the configured Windows boot/login lifecycle. Running `eden` opens the
+interactive client; it is not the command that boots Eden. Startup-mode changes
+and runtime lifecycle operations remain explicit administrative/service actions.
 
 ## Acceptance
 
-Kill Core during a synthetic task, restart Eden, and recover the task state without relying on the old model conversation.
+1. Kill Core during a synthetic task, restart Eden, and recover the task state
+   without relying on the old model conversation.
+2. During a live task, the default CLI explains in plain English what Eden is
+   doing, the current phase, completed steps, elapsed time, and waiting state.
+3. When evidence supports an estimate, the CLI shows a responsible ETA or range
+   and updates it; otherwise it clearly says that an estimate is unavailable or
+   still being established.
+4. The user can reveal sanitized technical details for the current operation,
+   including the applicable provider/tool/command, without exposing secrets.
+5. Health, inspection, model, chat, report, and task commands use one consistent
+   MVP visual language while retaining stable `--json` output and usable
+   redirected/no-color output.
+6. The progress/event model is UI-independent so Milestone 18 can stream and
+   render the same task state rather than creating a second tracking system.
+7. Running `eden` in an interactive terminal attaches to the already-running
+   Core, presents a clear home/client screen, allows immediate chat, and exposes
+   the main non-chat destinations without requiring command memorization.
+8. Slash-command and menu navigation can enter and return from inspection,
+   tasks, reports, models, health, and settings without losing the active session
+   or starting unintended work.
+9. Direct commands, redirected output, `--json`, help output, and automation
+   remain usable without launching the interactive shell.
+10. Opening the interactive client does not start or stop Eden's background
+    runtime and performs no broad inspection, model inference, privileged action,
+    or system mutation until the user selects or requests it.
+11. If Core is unavailable, the CLI reports that connection state clearly and
+    offers appropriate retry or guidance without implying that closing the CLI
+    shuts Eden down.
+12. Every Eden operation available through the interactive client, including
+    chat and inspection, has a direct `eden <command>` path that executes
+    without launching the interactive home and uses the same application
+    service as the interactive path.
+13. `/exit` disconnects only the current CLI client and leaves Eden running.
+    Starting Core does not open a second visible terminal window; Core runs as
+    a separate background process until explicitly stopped.
+14. `/corestart` and `/corestop` are idempotent, never mean Windows or System
+    Service lifecycle, and leave the interactive client open. When Core is
+    running, interactive stop requires a confirmation page with Cancel selected
+    first and a warning about temporary/session-only data and active work;
+    Cancel or Esc leaves Core running.
+15. A simulated graceful Core stop checkpoints active work and records an
+    intentional stop so restart recovery can distinguish it from a crash; the
+    real Service lifecycle integration is completed in Milestone 7.
+16. After `/corestop`, the interactive CLI has no chat input and shows Start
+    Core and More; More contains Help, Settings, and Exit. This does not behave
+    like `/exit`.
+17. A temporary chat is visibly marked and leaves no resumable transcript after
+    its temporary lifetime ends.
+18. A saved chat can be resumed after Core restart, exported, and deleted
+    without creating a report or loading its entire transcript into model
+    context.
+19. A report can link multiple conversation artifacts while its normal human
+    and AI views contain only material summaries rather than raw chat history.
+20. Linking a temporary chat discloses the persistence change; Eden never
+    silently saves it or silently moves it to a different report.
+21. Storage status shows the shared category budget and, with `--details`,
+    attributes report, Full/Compact conversation, memory, attachment, index,
+    database-overhead, protected, and reclaimable usage without changing data.
+22. Closing a report produces reviewable conversation-compaction candidates but
+    does not itself delete or compact a transcript. Closing requires an explicit
+    structured summary and outcome; resolved reports still require passing
+    verification. Candidates remain protected until unique transcript evidence
+    is explicitly reviewed, and those without a material contribution summary
+    remain protected rather than being assumed safe to compact.
+23. A temporary chat remains available while its owning CLI visits other
+    threads, warns on normal exit when meaningful or active, and is safely
+    stopped/discarded after an unexpected client disconnect without stopping
+    Core or another client's work.
+24. A safe-boundary-only segment emits a bold warning before it begins; a first
+    stop signal requests safe stop and a repeated signal requests hard stop.
+    Read-only diagnostic requests in a conversation use linked durable tasks;
+    ordinary chat answers remain conversations without task-list clutter.
+    The warning is informational and does not pause work or demand a reply;
+    any required approval is handled separately. Until the planning milestone,
+    the task-event path records and displays the imminent segment in chat.
+25. Terminal tasks leave active views but retain a final summary and minimal
+    durable audit record; completion alone does not create a report.
+26. The running interactive home ends in a chat composer rather than a New Chat
+    button. Typing sends a message directly; arrow keys and Enter reach the
+    secondary Conversations and Monitoring actions. The stopped home has
+    no composer; More is available only in its stopped-Core menu.
+27. The interactive client uses the alternate screen as a full-terminal
+    application and redraws it in place. Each thread contains only its own
+    transcript and shows its conversation ID once in the header. User messages
+    have a subtle gray outline while Eden's responses remain borderless. Home's Activity
+    area is this terminal's history of opened and worked-on conversations,
+    showing working/completed/deleted summaries rather than interleaved responses.
+    Deleted chats remain marked in Activity but disappear from Conversations.
+    The running home header uses the small ASCII tree as its right edge, with
+    a vertically centered, shorter open status box whose rules stop two spaces
+    before the art; compact layout is retained when the tree cannot fit.
+    Confirmation and other full-screen messages wrap and page at terminal width.
+    Long transcript lines wrap at word boundaries where possible,
+    reflow to the current width on
+    terminal resize without discarding source text; Page Up/Down scrolls through
+    older wrapped rows. Each mouse-wheel event scrolls exactly two wrapped
+    transcript rows, not button selection, while the title, buttons, and composer
+    stay fixed. The transcript fills the rows immediately below its title/status
+    header and above its composer, without reserved spacer rows. Short
+    transcripts are top-aligned; unused rows follow their text.
+    Once overflowing, the feed follows the latest messages unless scrolled up.
+    System notices
+    stay at their chronological position rather than after all later turns.
+    The original shell screen is restored when the client exits;
+    direct commands remain ordinary terminal output.
+28. `Esc` is the default back action across interactive subviews, and returns
+    from the chat composer only when its draft is empty. It never clears a draft.
+    Backspace removes the character before the cursor; Delete removes the
+    character at it. Ctrl+C and `/stop` continue to mean
+    stop work rather than navigate back.
+29. Non-interactive direct-command use remains fully functional and does not
+    enter interactive navigation.
+30. The CLI has one presentation; it has no simple/stylized toggle or persisted
+    presentation preference.
+31. The layout avoids a full-screen perimeter box, encloses the home status area
+    with smooth box-drawing, gives conversation title/status headers rounded corners and dark gray
+    characters on black, lightened to balance visually against the composer fill.
+    Navigation buttons use the same character color on black. The borderless composer has a dark neutral
+    background. Its message placeholder disappears once the user types;
+    the composer positions a native block cursor so supporting terminals can
+    render it as a hollow outline when focus is lost;
+    `/help for commands` sits below the button row, and persistent Enter/Esc/
+    Ctrl+C instruction text is not shown on the main screen.
+32. Conversations and Monitoring sit below the composer; More is shown only in
+    the stopped-Core menu. Down at the composer's bottom edge selects the
+    button row and Up returns to the composer. Within a
+    wrapped draft, left/right move the insertion point by character and up/down
+    move between text rows; left/right changes buttons only on the button row,
+    and typing focuses the composer.
+33. Typing `/` opens up to five prefix-matching command choices above the
+    composer. Further typing narrows the matches, and arrow navigation scrolls
+    through additional commands before completion or submission.
+34. Core automatically routes an ordinary conversational request into the
+    read-only diagnostic path when local evidence is required. `/inspect
+    [area]` performs the same in-thread operation with an explicit starting
+    scope.
+35. The Conversations subview includes current-client temporary chats as well
+    as saved chats. When meaningful temporary work triggers the exit chooser,
+    Discard & Exit is the initial selection.
 
 ---
 
@@ -427,6 +747,26 @@ A synthetic proposed mutation cannot execute unless Policy Engine determines the
 
 Changing the material plan invalidates the old approval.
 
+## Work tracking
+
+[Milestone 6 overview #12](https://github.com/calebthoren/Sys-Eden/issues/12)
+groups these independently testable objectives, all initially Not started:
+
+- #17 — Structured plans and versioning.
+- #18 — Capability metadata and action scope.
+- #19 — Risk assessment and five-dimensional confidence.
+- #20 — Policy Engine and authorization gate.
+- #21 — Scoped approval records and invalidation.
+- #22 — Denied plans and interrupted approval flow.
+- #23 — Explicit automation-permission storage.
+- #24 — Plan review and user involvement controls.
+- #25 — Authorization acceptance and failure tests.
+
+Dependencies and observable acceptance checks are in each issue. This milestone
+uses synthetic/fake execution to prove authority boundaries. The real privileged
+service is Milestone 7, and controlled system writes are Milestone 8; creating
+these issues does not implement either capability.
+
 ---
 
 # 11. Milestone 7 — Windows System Service
@@ -446,7 +786,10 @@ Create early boot observation and the privileged broker.
 - Named Pipe transport,
 - service authentication/validation,
 - service health,
-- lazy Core/model startup.
+- lazy Core/model startup,
+- coordinated but independently addressable Core and System Service lifecycle,
+- intentional-stop state so service/process recovery does not immediately undo
+  an explicit stop.
 
 ## CLI
 
@@ -455,6 +798,8 @@ eden service status
 eden service install
 eden service start
 eden service stop
+eden core start
+eden core stop
 ```
 
 ## Acceptance
@@ -464,7 +809,11 @@ Reboot Windows and verify:
 - service starts automatically in Always-On mode,
 - a boot session is recorded,
 - Core can retrieve the boot observation,
-- service remains independent of the model runtime.
+- service remains independent of the model runtime,
+- `eden core stop` checkpoints active work and stops Core without stopping the
+  Service, while `eden service stop` addresses the Service explicitly,
+- a client that issued `/corestop` remains open and accurately changes to the
+  Core-stopped home.
 
 ---
 
@@ -601,7 +950,11 @@ Give Eden useful memory across time.
 - significant-event summaries,
 - notification tiers,
 - post-fix monitoring,
-- boot trend monitoring.
+- boot trend monitoring,
+- complete Storage Manager accounting and pressure recommendations across all
+  configured categories,
+- user-configurable transcript compaction/retention policy enforcement,
+- detailed largest-consumer and reclaimable-space reporting.
 
 ## Acceptance
 
@@ -609,7 +962,9 @@ A resolved issue can automatically enter a defined monitoring period and later c
 
 At or before this point, expose basic storage accounting so Eden can report
 usage by category and honor user-configured budgets before telemetry begins
-growing materially.
+growing materially. Milestone 5 supplies the initial reports/conversations
+breakdown; this milestone completes cross-category accounting and policy-driven
+recommendations.
 
 ---
 
@@ -747,11 +1102,22 @@ Implement persistent:
 - provenance,
 - freshness,
 - confidence,
-- stale-memory handling.
+- stale-memory handling,
+- detection of likely user intent to create durable structured memory,
+- a concrete confirmation prompt before inferred memory creation,
+- explicit `/memory <content>` and `eden memory add "..."` commands whose use is
+  itself authorization to store the validated memory,
+- memory creation from temporary chats without persisting the transcript,
+- user-visible memory review and forgetting,
+- controlled cross-conversation retrieval that uses structured reports and
+  memory by default and raw saved-chat content only when the user requests or
+  confirms it.
 
 ## Acceptance
 
-Eden uses relevant historical preference/context but current explicit instructions still win.
+Eden uses relevant historical preference/context but current explicit
+instructions still win. It never turns ordinary chat into structured memory
+silently, and it can forget a memory independently from deleting a transcript.
 
 ---
 
@@ -790,6 +1156,11 @@ Likely stack:
 Initial UI:
 
 - chat,
+- conversation browser with temporary/saved/report-linked indicators,
+- persistence, resume, export, and deletion controls,
+- report-linked transcript access,
+- core/supporting/linked-artifact report views,
+- memory proposal and management controls,
 - task progress,
 - plan approval,
 - reports,
@@ -891,6 +1262,7 @@ Do not delay Core development for remote access.
 
 Do not treat these as blockers:
 
+- task-scoped screen capture and local visual analysis (see section 27.1),
 - polished final desktop UI,
 - full Control Center,
 - graph visualization,
@@ -905,6 +1277,36 @@ Do not treat these as blockers:
 - advanced self-created Skills,
 - sophisticated semantic/vector database,
 - broad autonomous repair without approval history.
+
+## 27.1 Deferred Screen Access
+
+Local reading/inspection and controlled writing/execution are the foundational
+priority. Complete and validate those capabilities through the existing roadmap
+before scheduling screen access; it is not a current milestone requirement.
+DEC-052 records the accepted direction, with implementation deferred.
+
+Future scope:
+
+- Task-related snapshots of a selected window, display, or region, with Off,
+  Ask first, and Automatic permission modes. Automatic permits capture when
+  needed for an active task within the configured scope. Proactive watching
+  and continuous screen recording are excluded from the planned feature.
+- Local image analysis through the replaceable model-provider interface.
+  Evaluate the existing vision-capable model first; a second model is not a
+  prerequisite. Any additional model must respect the configured storage budget.
+- Sensitive screenshots, and screenshots whose sensitivity is uncertain, are
+  processed transiently and not retained. Non-sensitive screenshots may be kept
+  locally only while Eden expects to revisit them for the associated task.
+- Delete retained screenshots automatically as soon as Eden no longer needs
+  them. The feature's retention policy must also bound abandoned-task retention
+  and recover cleanup after interruption/restart; exact limits remain deferred.
+- Keep only necessary, non-sensitive findings in durable history. Report links
+  do not extend screenshot lifetime. See reports section 30.1 and system rules
+  section 63.1 for handling requirements.
+
+Before implementation acceptance, test permission denial/revocation, sensitivity
+uncertainty, retention cleanup, restart/failure paths, and local model performance.
+Visual appearance alone cannot establish email authenticity or file safety.
 
 ---
 

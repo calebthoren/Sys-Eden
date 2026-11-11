@@ -1,6 +1,8 @@
 """SQLite lifecycle and transactional sessions for local repositories."""
 
 import sqlite3
+import sys
+import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -12,12 +14,32 @@ from sqlalchemy import Engine, create_engine, event, text
 from sqlalchemy.engine import URL
 from sqlalchemy.orm import Session, sessionmaker
 
-HEAD_REVISION = "0002"
-SUPPORTED_REVISIONS = {"0001", HEAD_REVISION}
+HEAD_REVISION = "0006"
+SUPPORTED_REVISIONS = {"0001", "0002", "0003", "0004", "0005", HEAD_REVISION}
+_WINDOWS = sys.platform == "win32"
 
 
 class StorageError(Exception):
     """Local persistence could not be initialized or accessed."""
+
+
+def _enable_wal(cursor: sqlite3.Cursor) -> None:
+    # After TerminateProcess, Windows may briefly retain a mapped -shm view.
+    # SQLite then reports IOERR_TRUNCATE while opening WAL. Retry only this
+    # initialization error; never retry writes or delete recovery journals.
+    deadline = time.monotonic() + 3
+    while True:
+        try:
+            cursor.execute("PRAGMA journal_mode=WAL")
+            return
+        except sqlite3.OperationalError as error:
+            if (
+                not _WINDOWS
+                or getattr(error, "sqlite_errorcode", None) != sqlite3.SQLITE_IOERR_TRUNCATE
+                or time.monotonic() >= deadline
+            ):
+                raise
+            time.sleep(0.05)
 
 
 def _configure_connection(connection: sqlite3.Connection, _: object) -> None:
@@ -27,7 +49,7 @@ def _configure_connection(connection: sqlite3.Connection, _: object) -> None:
     try:
         cursor.execute("PRAGMA foreign_keys=ON")
         cursor.execute("PRAGMA busy_timeout=5000")
-        cursor.execute("PRAGMA journal_mode=WAL")
+        _enable_wal(cursor)
     finally:
         cursor.close()
         connection.autocommit = previous_autocommit

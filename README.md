@@ -1,8 +1,19 @@
 # Sys Eden
 
-Local-first Windows system companion. The Milestone 3 structured-report
-implementation passes its functional checks and is ready to commit; Milestone 4
-local model integration is next in roadmap order after that commit.
+Local-first Windows system companion. Milestones 1 through 4 provide a runnable
+Core, broad read-only Windows inspection, durable structured reports, and local
+structured diagnostic reasoning through a replaceable model provider. Milestone
+5 has passed functional and owner visual acceptance: durable tasks, restart
+recovery, conversation persistence, storage attribution, unified chat/diagnostics,
+and the separate Core/CLI connection are implemented. Final validation passes
+239 tests, Ruff, Pyright, and all eight packaged live checks. Publication and
+milestone signoff are tracked in GitHub #11/#1. Milestone 6 objective issues are
+ready under [overview #12](https://github.com/calebthoren/Sys-Eden/issues/12), with
+implementation not started. Use the
+[Milestone 5 test handoff](docs/Sys_Eden_milestone_5_acceptance_v1.0.md) to run an
+isolated frozen candidate while development continues. Progress is tracked in
+[GitHub overview #1](https://github.com/calebthoren/Sys-Eden/issues/1); the
+[issue workflow](docs/Sys_Eden_issue_tracking_v1.0.md) explains status and closure.
 
 Read [AGENTS.md](AGENTS.md) and the versioned canonical documents in [docs](docs/).
 The roadmap owns implementation order.
@@ -17,6 +28,41 @@ uv run pyright
 uv run eden --help
 ```
 
+Milestone 5 Core and client lifecycle commands:
+
+```powershell
+uv run eden core status
+uv run eden core start
+uv run eden task list
+uv run eden chat list
+uv run eden storage status --details
+uv run eden core stop
+```
+
+Core runs as a separate normal-user process and owns SQLite access for the new
+Milestone 5 task, conversation, and storage paths. On Windows, CLI clients use
+an authenticated user-scoped named pipe. Closing a CLI does not stop Core.
+When `eden` is opened in a TTY with Core running, typing in the bottom composer
+sends a chat message and enters a dedicated conversation thread. That screen
+shows the conversation ID once and keeps its transcript separate; returning home
+leaves ongoing work visible as a working/completed Activity entry. Typing `/`
+opens a five-row prefix-filtered command palette with arrow navigation. Up/down
+otherwise moves within wrapped text; Down at the composer's bottom edge reaches
+the button row below it and Up returns to the composer. Left/right
+selects buttons on that row. `Esc` returns from subviews and leaves a conversation
+context only when the draft is empty; it never clears typed text. The dependency-free interactive
+client owns an alternate terminal screen with a boxed status section and dark,
+borderless composer with a high-contrast typing cursor, then restores the original shell when it exits. Eden has
+one CLI style.
+
+Conversation headers use rounded corners and dark gray characters on black.
+The characters use a lighter gray to balance their appearance against the
+composer fill. Navigation buttons use that same character color. The transcript
+fills the rows between that header and the composer, and each mouse-wheel event
+scrolls two wrapped lines. Short conversations start directly below the header,
+with unused space below the messages. System confirmations such as save/pin notices appear
+at their point in the conversation and scroll away with it.
+
 Bootstrap configuration uses validated defaults and `EDEN_` environment overrides,
 including `EDEN_DATA_DIRECTORY` and `EDEN_STORAGE__MODELS_BUDGET_GB`.
 Storage budgets are independent; automatic rebalancing defaults to disabled.
@@ -26,7 +72,7 @@ Do not put credentials in configuration or application log messages.
 
 `uv run eden health` initializes the development SQLite database through packaged
 Alembic migrations and returns JSON health for Core, configuration, database, and
-the explicitly fake model provider. Failed checks return exit code 1. Health logs
+the configured model provider. Failed checks return exit code 1. Health logs
 are JSON on stderr. SQLite uses WAL, foreign keys, and a five-second busy timeout.
 Existing unknown schema versions are rejected; a verified SQLite backup is retained
 before baseline migration. Sessions commit on success and roll back on failure.
@@ -136,3 +182,28 @@ updates use optimistic revisions, and metadata-first search can filter without
 loading complete report aggregates. Human views, compact AI capsules, and JSON
 exports are generated from the same canonical data. Export-to-file refuses to
 overwrite an existing path.
+
+Local model commands:
+
+```powershell
+uv run eden model health
+uv run eden model list
+uv run eden model list --json
+uv run eden chat "Does this system summary show anything concerning?"
+uv run eden chat "Assess this GPU state" --component gpu
+uv run eden chat "Assess this saved snapshot" --snapshot snapshot.json --json
+```
+
+The default provider is Ollama on the loopback-only endpoint
+`http://127.0.0.1:11434`; the reference development model is `qwen3.5:9b`.
+Override settings with `EDEN_MODEL__...` variables such as
+`EDEN_MODEL__DEFAULT_MODEL`, `EDEN_MODEL__ROUTING_PREFERENCE`, and
+`EDEN_MODEL__REQUEST_TIMEOUT_SECONDS`. `EDEN_MODEL__PROVIDER=fake` selects the
+deterministic development provider.
+
+`eden chat` collects one read-only live inspection component by default, or reads
+a supplied JSON snapshot. It builds bounded, origin-labeled context, selects an
+installed local model, requires a validated `DiagnosticAssessment`, and displays
+the result without executing any recommendation. Cloud-managed Ollama models and
+non-loopback endpoints are blocked. Model errors use stable structured codes and
+do not disable inspection, reports, or database health.

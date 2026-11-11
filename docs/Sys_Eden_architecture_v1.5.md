@@ -545,6 +545,20 @@ Useful for users who want diagnostics without an always-running assistant.
 
 When privileged execution is requested, the service may be started through the normal Windows/UAC process.
 
+### Intentional Core stop
+
+`eden core stop` and interactive `/corestop` gracefully stop the user-context
+Core, not Windows and not the independently owned Eden System Service. They
+checkpoint durable work at safe boundaries and record an intentional Core stop
+so crash recovery does not classify it as an interruption. A CLI client that
+issued `/corestop` remains open and changes to the Core-stopped home state.
+
+Eden remains stopped until an explicit lifecycle start or the next configured
+automatic startup event, such as Windows boot or user login in Always-On mode.
+Closing a UI or running `/exit` only disconnects that client and does not stop
+Core. `eden core start` and `/corestart` are idempotent explicit start controls;
+opening the client alone never starts Core.
+
 ---
 
 # 7. Boot-Time Observation
@@ -1110,6 +1124,14 @@ If Windows or Eden restarts during a task:
 
 Never blindly resume a mutating task after reboot without reconciling actual state.
 
+For the Milestone 5 read-only diagnostic runner, an interrupted attempt has no
+continuing worker. Recovery review shows its last checkpoint and permits closing
+that attempt as failed; the user can start a fresh diagnosis if it is still
+needed. Only generated synthetic fixtures may be reconciled to `paused` for
+resume testing. Reconciliation must never claim a real task is active merely by
+changing its database state. Later execution recovery must verify actual
+machine state and attach a real runner before offering resume.
+
 ---
 
 # 23. Concurrency
@@ -1139,6 +1161,26 @@ The Core should support control messages that can:
 - throttle.
 
 A user request that materially changes an active plan should pause execution at a safe boundary and return to plan approval.
+
+`/stop` or the first Ctrl+C while conversation work is active requests a safe
+stop for that work only. The CLI then explains that a second `/stop` or Ctrl+C
+requests a hard stop. A hard stop cancels cancellable work and Eden-owned helper
+processes immediately, prevents new steps, and marks uncertain partial state as
+`recovery_required`. It does not stop Core or unrelated conversations.
+
+Some operations cannot be interrupted safely after they begin. Before entering
+any such segment, Core emits a typed event containing the reason and the CLI
+shows a unique bold warning. This is normally transparent rather than an
+acknowledgment prompt. A stop request received inside the segment takes effect
+at the next safe boundary.
+
+Terminal tasks retain a short final summary, outcome identity, timestamps, and
+report/conversation relationships. They disappear from normal active views but
+are not converted into reports or deleted: the minimal durable record preserves
+audit and restart integrity. When a related report exists, the final summary is
+incorporated into that report; task completion alone does not force report
+creation. Retention policy may later prune transient progress/checkpoint detail
+without removing the minimal terminal record.
 
 ---
 
@@ -1477,6 +1519,11 @@ constraints help prevent orphaned or invalid references when those objects are
 created, updated, or deleted.
 
 The application must handle SQLite's single-writer nature deliberately.
+
+On Windows, WAL initialization retries only `SQLITE_IOERR_TRUNCATE` for up to
+three seconds because a forcibly terminated process may briefly leave shared
+memory mapped. Other I/O/corruption errors propagate immediately; this is not
+a retry policy for application writes. Recovery never deletes WAL/SHM files.
 
 ---
 
@@ -2188,6 +2235,21 @@ It may influence:
 Sensitivity is metadata about handling requirements, not a claim that the
 evidence is malicious or unreliable.
 
+### 65.2 Deferred Visual Evidence
+
+DEC-052 defines future task-scoped screen access; roadmap section 27.1 defers it
+until foundational local read/write capabilities are validated. Capture runs in
+the logged-in user's session through a Windows adapter, with permission checks
+outside the model. The privileged System Service does not own screen capture
+or visual inference. Image input extends the existing model-provider boundary;
+an adequate installed vision-capable model may serve both text and image tasks.
+
+Retained non-sensitive screenshots are temporary local evidence governed by
+reports section 30.1 and system rules section 63.1. Sensitive or unclassified
+images remain transient. Evidence metadata and concise findings may outlive the
+image, but a deleted image must be marked unavailable rather than represented
+as retrievable. Proactive watching and continuous recording are outside scope.
+
 ---
 
 # 66. Verification Architecture
@@ -2256,20 +2318,148 @@ Recommended CLI framework:
 
 **Typer**
 
+Typer owns direct `eden <command>` parsing and non-interactive behavior.
+The interactive TTY client is a full-terminal application over the same Core
+client. It uses the terminal's alternate screen while open and restores the
+user's original shell screen when the client exits. Direct commands never enter
+this application surface.
+
+When Core is running, the home ends in a conversation-first composer: typing and
+pressing Enter sends a message directly. Conversations and Monitoring sit
+on a button row below it. Up/down moves within wrapped composer
+text; Down at the bottom edge reaches the buttons and Up returns to the composer;
+left/right moves the insertion point or changes the selected button only on the
+button row. Typing
+from either row returns focus to the composer. A separate New Chat button is
+unnecessary. Sending from home creates a temporary conversation and enters a
+dedicated thread screen; further messages remain in that context. `/home` or
+`Esc` returns without stopping its work, while `/new` returns to an empty home
+composer. When Core is stopped, the composer is replaced by Start Core and More;
+More contains Help, Settings, and Exit without closing the CLI.
+
+A small standard-library Windows key reader supports the composer and actions.
+The application redraws its owned screen in place. Each thread uses its ID as a
+single rounded header with dark gray characters on a black background. The
+character color is lightened to balance its appearance against the composer fill;
+navigation buttons use the same gray characters on black. The transcript fills
+all rows directly between the header and composer, with no reserved spacer rows.
+Short conversations start at the top of that region, leaving unused space below
+their text. Overflow follows the latest messages unless the owner scrolls up.
+Each wheel event scrolls two wrapped transcript rows while the header, composer,
+and buttons stay fixed. System confirmations are client-only notices anchored
+between the messages present when they appear; later turns follow them rather
+than leaving notices permanently at the bottom. They do not enter model context
+or canonical conversation messages. DEC-053 records this owner-tested layout.
+The thread renders only its own transcript, outlining user messages in
+subtle gray while leaving Eden responses borderless. Home's Activity area instead
+summarizes working and recently completed conversations so leaving a thread does
+not mix multiple transcripts together. Typing `/` opens a palette of at most
+five prefix-matching commands above the composer; further typing narrows it and
+arrow navigation scrolls additional matches. The layout avoids a perimeter box
+and uses smooth box-drawing to enclose the top status section. The composer is
+borderless with a dark neutral background matching the chat surface. Its message
+placeholder disappears when the user types. The native terminal cursor is
+positioned at the insertion point, allowing the terminal to draw its own
+unfocused outline without Eden repainting a fake cursor;
+`/help for commands` remains
+below the button row, and no persistent Enter/Esc/Ctrl+C instruction strip is
+shown. It does not need a third-party TUI dependency. Redirected input/output
+never launches interactive navigation.
+
+Core classifies each conversational request before response generation. When
+the request requires local machine evidence, Core collects the selected
+read-only inspection scope and produces a structured diagnosis in that same
+thread. `/inspect [area]` bypasses only the intent choice by supplying the
+starting scope; it does not create a second diagnostic-chat mode. The
+Conversations subview includes both saved conversations and temporary chats
+owned by the current CLI session.
+
 Example commands:
 
 ```text
-eden chat
-eden inspect
+eden chat "Why is my PC running slowly?"
+eden inspect gpu
 eden health
 eden task list
 eden report list
 eden report show <id>
 eden watchlist
+eden core start
+eden core stop
 eden service status
 eden service start
 eden service stop
 ```
+
+Every Eden operation available from the interactive CLI should have a direct
+`eden <command>` form that performs the operation without opening the
+interactive home. This includes chat, inspection, health, task, report, model,
+settings, and lifecycle operations. Installed users invoke `eden` directly;
+`uv run` is only a development-repository launcher and is not part of the
+product CLI contract.
+
+`/corestart` and `/corestop` invoke the same lifecycle operations as
+`eden core start` and `eden core stop`. They are idempotent: requesting the
+current state produces an informational message, not an error. `/exit` remains
+client-only. When Core is stopped, the home screen has no chat input and exposes
+only Start Core, Help, Settings, and Exit.
+
+The CLI has one presentation. There is no simple/stylized toggle or persisted
+presentation preference. Future visual changes evolve this shared interface
+rather than creating parallel navigation modes.
+
+`Esc` is the consistent back action in interactive subviews such as
+Conversations, Monitoring, Help, Settings, and More. In the composer, the first
+`Esc` leaves the current conversation context only when the draft is empty;
+it never clears typed text. This remains distinct from Ctrl+C and
+`/stop`, which control active work.
+
+---
+
+# 69.1 Conversation Persistence Architecture
+
+Conversation persistence is separate from report knowledge and structured
+memory. The canonical behavior is defined in `conversations.md`.
+
+Core owns a conversation repository with three user-visible states:
+
+- temporary — active-session transcript only,
+- saved — locally persistent and resumable without requiring a report,
+- report-linked — a persistent conversation artifact related to a primary
+  report, with optional references to other reports.
+
+For the MVP, durable conversation metadata and messages should use normalized
+SQLite records behind repository interfaces. Reports reference conversation
+entities through explicit link records; raw messages are not copied into report
+body fields. Generated transcript exports may look and behave like linked files,
+but they are derived views rather than a second writable source of truth.
+
+Resumption should rebuild bounded model context from recent messages, a rolling
+conversation summary, durable task state, and report retrieval capsules when
+applicable. It should retrieve older raw messages only when needed. A saved
+transcript is not blanket permission to inject that transcript into unrelated
+conversations.
+
+Temporary conversations are the privacy-first default for unclassified chat.
+They are owned by one CLI client session, may keep working while that client
+visits home or another thread, and survive for that client's lifetime rather
+than only while one thread is visible. Persistence and report state remain
+visible, and promotion to persistent storage must not occur silently. A saved
+conversation may exist without a report. A report may link multiple
+conversations.
+
+Before an intentional client exit, meaningful or working temporary chats cause
+a choice to save, stop/discard, or cancel exit. A vanished client cannot be
+reliably prompted. Core therefore uses a client ownership lease and a short
+disconnect grace period, safely stops that client's temporary work, and deletes
+only that client's temporary chats. A best-effort Windows console close handler
+may signal disconnect, but correctness does not depend on it and closing a
+terminal window never stops Core.
+
+Structured memory remains a distinct repository. Inferred memory intent causes
+Eden to propose the exact memory and ask; explicit `/memory <content>` or its
+direct CLI equivalent authorizes validated storage without a redundant intent
+prompt. This works even in a temporary chat without saving the transcript.
 
 ---
 
@@ -3584,6 +3774,19 @@ recovery_artifacts
 host_free_space
 ```
 
+Within `reports_memory_database`, Storage Manager should attribute usage to:
+
+```text
+structured_reports
+conversation_transcripts_full
+conversation_records_compact
+structured_memory
+report_conversation_attachments
+search_indexes_and_summaries
+database_wal_and_overhead
+estimated_reclaimable
+```
+
 Responsibilities:
 
 - report actual usage by category,
@@ -3601,10 +3804,22 @@ A future UI/CLI should make budget changes explicit, for example:
 
 ```text
 eden storage status
+eden storage status --details
+eden storage reports --details
+eden storage conversations --details
+eden storage attachments --details
+eden storage recommendations
 eden storage set models 16GB
 eden storage set telemetry 3GB
 eden storage set reserve 10GB
 ```
+
+The default status view reports category totals, budgets, remaining capacity,
+and pressure. `--details` adds counts, subcategory attribution, largest
+consumers, protected/pinned records, Full versus Compact transcripts, active
+versus closed report relationships, and estimated reclaimable space. Read-only
+status and recommendation commands must remain distinct from compact/delete
+operations.
 
 Exact command syntax is deferred.
 

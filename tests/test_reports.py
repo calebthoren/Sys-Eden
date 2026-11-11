@@ -223,7 +223,14 @@ def test_optimistic_revision_conflict_preserves_newer_report(report_store):
     assert repository.get(stale.id).summary == first.summary
 
 
-def test_report_cli_list_show_capsule_and_export(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+def test_report_cli_list_show_capsule_and_export(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest
+):
+    import sys_eden.cli as cli_module
+    from sys_eden.config import Settings
+    from sys_eden.core_application import CoreApplication
+    from sys_eden.core_rpc import CoreRpcDispatcher, RpcRequest
+    from sys_eden.models import FakeModelProvider
     data_directory = tmp_path / "data"
     monkeypatch.setenv("EDEN_DATA_DIRECTORY", str(data_directory))
     database = Database(data_directory / "eden.db")
@@ -233,14 +240,36 @@ def test_report_cli_list_show_capsule_and_export(tmp_path: Path, monkeypatch: py
     finally:
         database.close()
 
+    application = CoreApplication(Settings(data_directory=data_directory), FakeModelProvider())
+    application.start()
+    def close_application():
+        application.stop()
+        application.close()
+    request.addfinalizer(close_application)
+    dispatcher = CoreRpcDispatcher(application)
+
+    def rpc(method, **params):
+        response = dispatcher.dispatch(RpcRequest(method=method, params=params))
+        assert response.ok, response.error
+        return response.result
+
+    monkeypatch.setattr(cli_module, "_rpc_or_exit", rpc)
+    monkeypatch.setattr(cli_module, "_settings_or_exit", lambda: application.settings)
+
     runner = CliRunner()
     listed = runner.invoke(app, ["report", "list", "--component", "software", "--json"])
     assert listed.exit_code == 0, listed.output
-    assert json.loads(listed.stdout)[0]["id"] == "rpt-synthetic"
+    listed_json = json.loads(listed.stdout)
+    assert listed_json["type"] == "report.list"
+    assert listed_json["data"][0]["id"] == "rpt-synthetic"
 
     shown = runner.invoke(app, ["report", "show", "rpt-synthetic"])
     assert shown.exit_code == 0, shown.output
     assert "Synthetic Application Crash Investigation" in shown.stdout
+
+    shown_json = runner.invoke(app, ["report", "show", "rpt-synthetic", "--json"])
+    assert shown_json.exit_code == 0, shown_json.output
+    assert json.loads(shown_json.stdout)["data"]["report"]["id"] == "rpt-synthetic"
 
     capsule = runner.invoke(app, ["report", "show", "rpt-synthetic", "--capsule"])
     assert capsule.exit_code == 0, capsule.output
@@ -251,7 +280,7 @@ def test_report_cli_list_show_capsule_and_export(tmp_path: Path, monkeypatch: py
         app, ["report", "export", "rpt-synthetic", "--output", str(export_path)]
     )
     assert exported.exit_code == 0, exported.output
-    assert json.loads(export_path.read_text(encoding="utf-8"))["id"] == "rpt-synthetic"
+    assert json.loads(export_path.read_text(encoding="utf-8"))["data"]["report"]["id"] == "rpt-synthetic"
     refused = runner.invoke(
         app, ["report", "export", "rpt-synthetic", "--output", str(export_path)]
     )

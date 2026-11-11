@@ -9,7 +9,8 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from sys_eden.config import Settings
 from sys_eden.events import Event, EventBus
-from sys_eden.models import FakeModelProvider, ModelProvider, ProviderHealth
+from sys_eden.model_runtime import create_model_provider
+from sys_eden.models import ModelProvider, ModelProviderError, ProviderHealth
 from sys_eden.storage import Database, StorageError
 
 
@@ -24,7 +25,7 @@ class HealthSummary(BaseModel):
 class Core:
     def __init__(self, settings: Settings, provider: ModelProvider | None = None):
         self.settings = settings
-        self.provider = provider if provider is not None else FakeModelProvider()
+        self.provider = provider if provider is not None else create_model_provider(settings)
         self.events = EventBus()
 
     def _database_health(self) -> str:
@@ -42,7 +43,7 @@ class Core:
         try:
             async with asyncio.timeout(5):
                 provider = await self.provider.health()
-        except (OSError, TimeoutError):
+        except (ModelProviderError, OSError, TimeoutError):
             provider = ProviderHealth(provider="unavailable", available=False)
         summary = HealthSummary(
             core="ok" if database == "ok" and provider.available else "degraded",

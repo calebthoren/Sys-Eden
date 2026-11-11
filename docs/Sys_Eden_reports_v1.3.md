@@ -123,6 +123,11 @@ A report is **not**:
 
 A report MAY reference any of those systems, but it remains a distinct structured record.
 
+Saved chat transcripts are separate conversation artifacts. A report MAY link
+to them and preserve a concise contribution summary when the conversation adds
+material information, but it MUST NOT copy the raw transcript into the report
+body merely because the chat is related.
+
 ---
 
 ## 4. The Single-Effort Rule
@@ -845,6 +850,28 @@ Links to:
 - Skills.
 - Relevant configuration.
 
+### 14.16 Information Tiers and Conversation Artifacts
+
+Report presentation and retrieval SHOULD distinguish three logical tiers:
+
+1. **Core information** — objective, trigger, crucial initial conditions and
+   constraints, current/final conclusion, strongest evidence, important actions,
+   verification, outcome, unresolved risks, and next steps.
+2. **Supporting information** — secondary observations, detailed chronology,
+   meaningful alternatives, lower-priority evidence, expanded explanation, and
+   concise conversation-contribution summaries.
+3. **Linked artifacts** — saved chat transcripts, raw logs, evidence
+   attachments, exports, command output, and research captures.
+
+These are retrieval and presentation tiers, not necessarily separate physical
+report records. Normal AI and human summaries prioritize core information.
+Supporting information is expanded when useful. Linked artifacts are loaded
+only when needed.
+
+A report-to-conversation relationship points to the canonical conversation
+artifact. It may include a short contribution summary describing why that chat
+matters to the report. Multiple conversations may be linked to one report.
+
 ---
 
 ## 15. Report Lifecycle
@@ -1458,7 +1485,8 @@ When solving a new problem, Eden SHOULD:
 4. Rank likely relevant reports.
 5. Load compact AI retrieval capsules for the best candidates.
 6. Load the full structured report only when needed.
-7. Load raw evidence only when necessary.
+7. Load supporting information only when it materially helps.
+8. Load linked transcripts or raw evidence only when necessary.
 
 This avoids consuming model context with complete historical records when a
 small structured capsule already contains the useful result.
@@ -1617,6 +1645,25 @@ Evidence attachments SHOULD have:
 
 The report should explain why the attachment matters.
 
+### 30.1 Deferred Screenshot Evidence
+
+For future task-scoped screen access (DEC-052), screenshots are temporary
+evidence, not permanent report attachments. Sensitive images and images whose
+sensitivity is uncertain MUST NOT be retained. Eden MAY save a non-sensitive
+screenshot locally while it expects to revisit it for the associated task.
+
+Delete the image automatically as soon as that need ends, even if the report
+remains open. The feature's retention policy must bound abandoned-task retention
+and recover cleanup after interruption/restart; linking an image to a report
+does not grant indefinite storage. Apply cleanup to Eden-managed image copies
+and caches as well, without deleting unrelated user-owned files.
+
+A report MAY preserve necessary non-sensitive observations, capture metadata,
+and an indication that the source image was deleted. It MUST NOT embed the raw
+image or claim the deleted evidence remains available. Avoid full-screen text
+transcriptions and unnecessary sensitive details in summaries. This image
+lifecycle is separate from report deletion and conversation compaction.
+
 ---
 
 ## 31. Raw Logs Versus Reports
@@ -1682,6 +1729,23 @@ If storage pressure requires report cleanup:
 The Report Repository should expose enough size/accounting information for the
 Storage Manager to attribute report/database usage without making report logic
 responsible for global storage policy.
+
+### 32.2 Linked-conversation retention when a report closes
+
+Closing or archiving a report does not automatically delete or compact its
+linked conversation transcripts. Report closure triggers a retention review:
+
+1. confirm that crucial initial information, conclusions, actions,
+   verification, outcome, and unresolved concerns are present in the report,
+2. update material conversation-contribution summaries,
+3. identify any transcript content that remains unique evidence,
+4. protect conversations linked to another active/open report,
+5. mark only the remaining eligible transcripts as compaction candidates.
+
+The structured report and retrieval capsule normally outlive raw conversational
+history. A Full transcript may become Compact only under an explicit user action
+or previously enabled retention policy. Report deletion remains rarer and more
+consequential than transcript compaction.
 
 ---
 
